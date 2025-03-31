@@ -1,8 +1,6 @@
 #will contain known information regarding usgs storage information
 
-
 import os
-
 
 class Project: 
     def __init__(self, project_id : int, project_files : list):
@@ -45,18 +43,36 @@ class USGS_Known_Projects:
         with open(file, 'r') as f:
             lines = f.readlines()
             for line in lines:
-                files.append(line.strip())
+                #each line contains the parent directory in the line. Dont need this
+
+                cleaned = line.split('/')[-1].strip()
+                files.append(cleaned)
 
         return files
 
     def __init__(self): 
         projects_dir = os.path.dirname(os.path.abspath(__file__))
+        self.project_files = {}
 
         for project_id  in self.registered_project_id_to_file:
             project_file_name = self.registered_project_id_to_file[project_id]
             file = USGS_Known_Projects.find_file(projects_dir, project_file_name)
-            parsed = USGS_Known_Projects.parse_data_file(file)
-            print('test')
+            if file is None:
+                raise Exception("Failed to find datafile")
+            
+            fileNames = USGS_Known_Projects.parse_data_file(file)
+            
+            if project_id not in self.project_files:
+                self.project_files[project_id] = fileNames
+            else:
+                raise Exception("Duplicate project")
+
+    def getProjectID(self, chunkFileName): 
+        for project_id in self.project_files:
+            if chunkFileName in self.project_files[project_id]:
+                return project_id
+        
+        return None
 
 if __name__ == "__main__": 
     usgs_knowns = USGS_Known_Projects()
