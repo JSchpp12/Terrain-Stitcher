@@ -75,6 +75,15 @@ class USGS_ScrapedData:
         lon = USGS_ScrapedData.getValueForTableRowWithFirstColumnOf(parsed_content, 'SW Corner Long dec')
 
         return (lat, lon)
+    
+    def getCoords_center(parsed_content) -> tuple[float, float]: 
+        lat = None
+        lon = None
+
+        lat = USGS_ScrapedData.getValueForTableRowWithFirstColumnOf(parsed_content, "Center Latitude dec")
+        lon = USGS_ScrapedData.getValueForTableRowWithFirstColumnOf(parsed_content, "Center Longitude dec")
+
+        return (lat, lon)
 
     def parse(url): 
         response = requests.get(url)
@@ -88,6 +97,7 @@ class USGS_ScrapedData:
         self.coords_northWest = None
         self.coords_southEast = None
         self.coords_southWest = None
+        self.coords_center = None
 
         url = f"https://earthexplorer.usgs.gov/scene/metadata/full/{project_id}/{full_chunk_name}/"
         self.soup = USGS_ScrapedData.parse(url)
@@ -99,6 +109,7 @@ class USGS_ScrapedData:
         self.coords_northWest = USGS_ScrapedData.getCoords_northWest(self.soup)
         self.coords_southEast = USGS_ScrapedData.getCoords_southEast(self.soup)
         self.coords_southWest = USGS_ScrapedData.getCoords_southWest(self.soup)
+        self.coords_center = USGS_ScrapedData.getCoords_center(self.soup)
 
 if __name__ == "__main__": 
     pass 

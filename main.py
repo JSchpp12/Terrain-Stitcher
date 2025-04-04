@@ -16,11 +16,12 @@ class Coordinates:
         self.lon = float(lon)
 
 class Bounds:
-    def __init__(self,coords_northEast : Coordinates, coords_southEast : Coordinates, coords_southWest : Coordinates, coords_northWest : Coordinates): 
+    def __init__(self,coords_northEast : Coordinates, coords_southEast : Coordinates, coords_southWest : Coordinates, coords_northWest : Coordinates, coords_center : Coordinates): 
         self.coords_northEast = coords_northEast
         self.coords_southEast = coords_southEast
         self.coords_southWest = coords_southWest
         self.coords_northWest = coords_northWest
+        self.coords_center = coords_center
 
 class Terrain_Data:
     def __init__(self, chunk_name : str, orthoTexturePath : str, sectionedHeightPath : str, bounds : Bounds):
@@ -45,14 +46,18 @@ def find_file(directory, file_name):
 def latlon_to_pixel(lat, lon, bbox, image_size):
     """Convert lat/lon coordinates to pixel coordinates
     """
-    # y_min, x_min, x_max, y_max = bbox
     y_min = bbox.bottom
     y_max = bbox.top
     x_min = bbox.left
     x_max = bbox.right
     
-    x_dist = abs(x_max - x_min)
-    x = int(image_size[0] * abs(lon - x_min) / (x_dist))
+    # x_dist = abs(x_max - x_min)
+    # x = int(image_size[0] * abs(lon - x_min) / (x_dist))
+    # y = abs(image_size[1] - int(image_size[1] * abs(lat - y_min) / (abs(y_max - y_min))))
+    # return x, y
+
+    # x_min, y_min, x_max, y_max = bbox
+    x = int(image_size[0] * abs(lon - x_min) / (abs(x_max - x_min)))
     y = abs(image_size[1] - int(image_size[1] * abs(lat - y_min) / (abs(y_max - y_min))))
     return x, y
 
@@ -91,7 +96,8 @@ def get_full_bounds_for_terrain(full_terrain_chunk_name : str) -> Bounds:
         Coordinates(scraped_data.coords_northEast[0], scraped_data.coords_northEast[1]),
         Coordinates(scraped_data.coords_southEast[0], scraped_data.coords_southEast[1]),
         Coordinates(scraped_data.coords_southWest[0], scraped_data.coords_southWest[1]),
-        Coordinates(scraped_data.coords_northWest[0], scraped_data.coords_northWest[1])
+        Coordinates(scraped_data.coords_northWest[0], scraped_data.coords_northWest[1]),
+        Coordinates(scraped_data.coords_center[0], scraped_data.coords_center[1])
     )
 
 def cutout_terrain_area_from_main_elevation_data(full_elevation_data_path : str, result_root_dir : str, focus_terrain_bounds : Bounds, focus_terrain_name : str) -> str: 
@@ -153,6 +159,9 @@ def create_json_info_file(result_dir : str, chunk_infos) -> None:
         image_data["corners"]["NW"] = {}
         image_data["corners"]["NW"]["lat"] = info.bounds.coords_northWest.lat
         image_data["corners"]["NW"]["lon"] = info.bounds.coords_northWest.lon
+        image_data["corners"]["center"] = {}
+        image_data["corners"]["center"]["lat"] = info.bounds.coords_center.lat
+        image_data["corners"]["center"]["lon"] = info.bounds.coords_center.lon 
 
         json_data['images'].append(image_data)
 
