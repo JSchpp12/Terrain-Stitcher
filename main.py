@@ -3,6 +3,7 @@ import os
 import json
 import rasterio
 import shutil
+import math
 
 from zipfile import ZipFile
 from PIL import Image as pImage
@@ -43,23 +44,24 @@ def find_file(directory, file_name):
     return None
 
 
-def latlon_to_pixel(lat, lon, bbox, image_size):
+def get_window_bounds(focus_area_bounds : Bounds, source_bounds, image_size):
     """Convert lat/lon coordinates to pixel coordinates
     """
-    y_min = bbox.bottom
-    y_max = bbox.top
-    x_min = bbox.left
-    x_max = bbox.right
-    
-    # x_dist = abs(x_max - x_min)
-    # x = int(image_size[0] * abs(lon - x_min) / (x_dist))
-    # y = abs(image_size[1] - int(image_size[1] * abs(lat - y_min) / (abs(y_max - y_min))))
-    # return x, y
+    y_min = source_bounds.bottom
+    y_max = source_bounds.top
+    x_min = source_bounds.left
+    x_max = source_bounds.right
 
-    # x_min, y_min, x_max, y_max = bbox
-    x = int(image_size[0] * abs(lon - x_min) / (abs(x_max - x_min)))
-    y = abs(image_size[1] - int(image_size[1] * abs(lat - y_min) / (abs(y_max - y_min))))
-    return x, y
+    wLon_max = round(focus_area_bounds.coords_northEast.lon, 3)
+    wLon_min = round(focus_area_bounds.coords_southWest.lon, 3)
+    wLat_max = round(focus_area_bounds.coords_northEast.lat, 3)
+    wLat_min = round(focus_area_bounds.coords_southWest.lat, 3)
+
+    f_x_min = int(math.floor(image_size[0] * abs(wLon_min - x_min) / (abs(x_max - x_min))))
+    f_x_max = int(math.floor(image_size[0] * abs(wLon_max - x_min) / (abs(x_max - x_min))))
+    f_y_min = abs(image_size[1] - int(math.floor(image_size[1] * abs(wLat_min - y_min) / (abs(y_max - y_min)))))
+    f_y_max = abs(image_size[1] - int(math.floor(image_size[1] * abs(wLat_max - y_min) / (abs(y_max - y_min)))))
+    return f_x_min, f_x_max, f_y_min, f_y_max
 
 def extract_terrain_data(compressed_file_path : str, output_dir : str, chunk_name : str) -> None: 
     if not os.path.isfile(compressed_file_path):
@@ -105,10 +107,13 @@ def cutout_terrain_area_from_main_elevation_data(full_elevation_data_path : str,
         raise Exception("Provided path to main elevation data not found")
     
     with rasterio.open(full_elevation_data_path) as full_ele_file: 
-        x_min, y_min = latlon_to_pixel(focus_terrain_bounds.coords_southWest.lat, focus_terrain_bounds.coords_southWest.lon, full_ele_file.bounds, (full_ele_file.width, full_ele_file.height))
-        x_max, y_max = latlon_to_pixel(focus_terrain_bounds.coords_northEast.lat, focus_terrain_bounds.coords_northEast.lon, full_ele_file.bounds, (full_ele_file.width, full_ele_file.height))
+        x_min, x_max, y_min, y_max = get_window_bounds(focus_terrain_bounds, full_ele_file.bounds, (full_ele_file.width, full_ele_file.height))
 
-        window = rasterio.windows.Window(x_min, y_min - abs(y_max-y_min), abs(x_max - x_min), abs(y_max - y_min))
+        col_offset = x_min
+        row_offset = y_min - abs(y_max-y_min)
+        width = abs(x_max - x_min)
+        height = abs(y_max - y_min)
+        window = rasterio.windows.Window(col_offset, row_offset, width, height)
 
         #prepare metadata for copy
         meta = full_ele_file.meta.copy()
@@ -136,8 +141,9 @@ def copy_ortho_image(result_dir : str, working_dir : str, chunk_name : str) -> s
 
     return dst_ortho_path
 
-def create_json_info_file(result_dir : str, chunk_infos) -> None: 
+def create_json_info_file(result_dir : str, main_terrain_file_path : str, chunk_infos) -> None: 
     json_data = {}
+    json_data["full_terrain_file"] = main_terrain_file_path
     json_data['images'] = []
 
     for info in chunk_infos:
@@ -145,7 +151,6 @@ def create_json_info_file(result_dir : str, chunk_infos) -> None:
 
         image_data["name"] = info.chunk_name
         image_data["texture_file"] = info.orthoTexturePath
-        image_data["height_file"] = info.sectionedHeightPath
         image_data["corners"] = {}
         image_data["corners"]["NE"] = {}
         image_data["corners"]["NE"]["lat"] = info.bounds.coords_northEast.lat
@@ -221,5 +226,9 @@ if __name__ == "__main__":
             os.path.relpath(terrain_cutout_path, start=output_dir), 
             bounds))
     
-    create_json_info_file(output_dir, processed_chunk_data)
+    full_result_file_path = os.path.join(output_dir, os.path.basename(elevation_file))
+    shutil.copy(elevation_file, full_result_file_path)
+    rel_result_path = os.path.relpath(full_result_file_path, start=output_dir)
+    
+    create_json_info_file(output_dir, rel_result_path, processed_chunk_data)
     shutil.rmtree(tmp_dir)
