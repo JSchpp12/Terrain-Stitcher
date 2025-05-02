@@ -28,7 +28,6 @@ class Terrain_Data:
     def __init__(self, chunk_name : str, orthoTexturePath : str, sectionedHeightPath : str, bounds : Bounds):
         self.chunk_name = chunk_name
         self.orthoTexturePath = orthoTexturePath
-        self.sectionedHeightPath = sectionedHeightPath
         self.bounds = bounds
     
 def find_file(directory, file_name):
@@ -136,6 +135,7 @@ def copy_ortho_image(result_dir : str, working_dir : str, chunk_name : str) -> s
     dst_ortho_path = os.path.join(result_dir, f"{chunk_name}.jpg")
 
     im = pImage.open(src_ortho_path)
+
     im.thumbnail(im.size)
     im.save(dst_ortho_path, "JPEG", quality=90)
 
@@ -215,7 +215,6 @@ if __name__ == "__main__":
         extracted_chunk_dir = extract_terrain_data(file_path, tmp_dir, chunk_name)
 
         bounds = get_full_bounds_for_terrain(chunk_name)
-        terrain_cutout_path = cutout_terrain_area_from_main_elevation_data(elevation_file, output_dir, bounds, chunk_name)
         terrain_result_ortho = copy_ortho_image(output_dir, extracted_chunk_dir, chunk_name)
 
         #create terrain data
@@ -223,7 +222,6 @@ if __name__ == "__main__":
         processed_chunk_data.append(Terrain_Data(
             chunk_name,
             os.path.relpath(terrain_result_ortho, start=output_dir), 
-            os.path.relpath(terrain_cutout_path, start=output_dir), 
             bounds))
     
     full_result_file_path = os.path.join(output_dir, os.path.basename(elevation_file))
