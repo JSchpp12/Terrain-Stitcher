@@ -25,7 +25,7 @@ class Bounds:
         self.coords_center = coords_center
 
 class Terrain_Data:
-    def __init__(self, chunk_name : str, orthoTexturePath : str, sectionedHeightPath : str, bounds : Bounds):
+    def __init__(self, chunk_name : str, orthoTexturePath : str, bounds : Bounds):
         self.chunk_name = chunk_name
         self.orthoTexturePath = orthoTexturePath
         self.bounds = bounds
@@ -132,12 +132,12 @@ def copy_ortho_image(result_dir : str, working_dir : str, chunk_name : str) -> s
 
     #work through directory to find file
     src_ortho_path = find_file(working_dir, f"{shortened_chunk_name}.tif")
-    dst_ortho_path = os.path.join(result_dir, f"{chunk_name}.jpg")
+    dst_ortho_path = os.path.join(result_dir, f"{chunk_name}.png")
 
     im = pImage.open(src_ortho_path)
 
     im.thumbnail(im.size)
-    im.save(dst_ortho_path, "JPEG", quality=90)
+    im.save(dst_ortho_path)
 
     return dst_ortho_path
 
@@ -150,7 +150,7 @@ def create_json_info_file(result_dir : str, main_terrain_file_path : str, chunk_
         image_data = {}
 
         image_data["name"] = info.chunk_name
-        image_data["texture_file"] = info.orthoTexturePath
+        image_data["texture_name_no_extension"] = info.orthoTexturePath
         image_data["corners"] = {}
         image_data["corners"]["NE"] = {}
         image_data["corners"]["NE"]["lat"] = info.bounds.coords_northEast.lat
@@ -218,10 +218,12 @@ if __name__ == "__main__":
         terrain_result_ortho = copy_ortho_image(output_dir, extracted_chunk_dir, chunk_name)
 
         #create terrain data
-        
+        rel_path = os.path.relpath(terrain_result_ortho, start=output_dir)
+        core_texture_name = os.path.splitext(os.path.basename(rel_path))[0]
+
         processed_chunk_data.append(Terrain_Data(
             chunk_name,
-            os.path.relpath(terrain_result_ortho, start=output_dir), 
+            core_texture_name, 
             bounds))
     
     full_result_file_path = os.path.join(output_dir, os.path.basename(elevation_file))
