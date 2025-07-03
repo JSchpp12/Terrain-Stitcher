@@ -127,7 +127,7 @@ def cutout_terrain_area_from_main_elevation_data(full_elevation_data_path : str,
 
     return cropped_path
 
-def copy_ortho_image(result_dir : str, working_dir : str, chunk_name : str) -> str:
+def copy_ortho_image(result_dir : str, working_dir : str, chunk_name : str, scale_factor : float) -> str:
     shortened_chunk_name = chunk_name.split('_')[-1]
 
     #work through directory to find file
@@ -136,9 +136,12 @@ def copy_ortho_image(result_dir : str, working_dir : str, chunk_name : str) -> s
 
     im = pImage.open(src_ortho_path)
 
-    im.thumbnail(im.size)
-    im.save(dst_ortho_path)
+    if scale_factor != 1.0:
+        new_width = im.width * scale_factor
+        new_height = im.height * scale_factor
+        im = im.resize((int(new_width), int(new_height)), resample=pImage.LANCZOS)
 
+    im.save(dst_ortho_path)
     return dst_ortho_path
 
 def create_json_info_file(result_dir : str, main_terrain_file_path : str, chunk_infos) -> None: 
@@ -183,7 +186,8 @@ if __name__ == "__main__":
     parser.add_argument('-textureDir', '--terrainTextureDir', type=str, required=True, help='The path to the directory containing the terrain textures')
     parser.add_argument('-elevationFile', '--terrainElevationFile', type=str, required=True, help='The path to the elevation file for terrain processing')
     parser.add_argument('-output', '--outputDir', type=str, default='result', help='The path to the output directory for the results (default: result)')
-    
+    parser.add_argument('-scale', '--scaleFactor', type=float, default=1.0, help='Resolution scale to apply to terrain images')
+
     # Parse the command line arguments
     args = parser.parse_args()
     
@@ -204,30 +208,50 @@ if __name__ == "__main__":
     tmp_dir = os.path.join(os.getcwd(), 'tmp')
     if not os.path.exists(tmp_dir):
         os.mkdir(tmp_dir)
+
+    scale_factor = args.scaleFactor
+    if scale_factor <= 0.0: 
+        raise Exception("Scale factor must be larger than 0")
     
     processed_chunk_data = []
     
-    for file in os.listdir(terrain_texture_dir):
+    all_terrain_files = os.listdir(terrain_texture_dir)
+    current_terrain_files_chunk_names = os.listdir(output_dir)
+
+    for i in range(len(current_terrain_files_chunk_names)):
+        current_terrain_files_chunk_names[i] = current_terrain_files_chunk_names[i].removesuffix('.png')
+
+    print('Processing terrain files...')
+    for i in range(len(all_terrain_files)):
+        print(f'Processing: {i+1}/{len(all_terrain_files)} -- {all_terrain_files[i]}')
+        file = all_terrain_files[i]
+
         file_path = os.path.join(terrain_texture_dir, file)
         extracted_file_working_path = os.path.join(tmp_dir, file[:-4])
         chunk_name = file.split('.')[0]
-        
-        extracted_chunk_dir = extract_terrain_data(file_path, tmp_dir, chunk_name)
 
-        bounds = get_full_bounds_for_terrain(chunk_name)
-        terrain_result_ortho = copy_ortho_image(output_dir, extracted_chunk_dir, chunk_name)
+        if chunk_name not in current_terrain_files_chunk_names:
+            extracted_chunk_dir = extract_terrain_data(file_path, tmp_dir, chunk_name)
 
-        #create terrain data
-        rel_path = os.path.relpath(terrain_result_ortho, start=output_dir)
-        core_texture_name = os.path.splitext(os.path.basename(rel_path))[0]
+            bounds = get_full_bounds_for_terrain(chunk_name)
+            terrain_result_ortho = copy_ortho_image(output_dir, extracted_chunk_dir, chunk_name, scale_factor)
 
-        processed_chunk_data.append(Terrain_Data(
-            chunk_name,
-            core_texture_name, 
-            bounds))
+            #create terrain data
+            rel_path = os.path.relpath(terrain_result_ortho, start=output_dir)
+            core_texture_name = os.path.splitext(os.path.basename(rel_path))[0]
+
+            processed_chunk_data.append(Terrain_Data(
+                chunk_name,
+                core_texture_name, 
+                bounds))
     
     full_result_file_path = os.path.join(output_dir, os.path.basename(elevation_file))
-    shutil.copy(elevation_file, full_result_file_path)
+
+    if scale_factor == 1.0:
+        shutil.copy(elevation_file, full_result_file_path)
+    else:
+        pass
+        
     rel_result_path = os.path.relpath(full_result_file_path, start=output_dir)
     
     create_json_info_file(output_dir, rel_result_path, processed_chunk_data)
