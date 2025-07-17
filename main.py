@@ -4,12 +4,106 @@ import json
 import rasterio
 import shutil
 import math
+import pyproj
 
 from zipfile import ZipFile
 from PIL import Image as pImage
 
 from constants import USGS_Helpers
 from helpers import USGS_Scraper
+from shapely.geometry import Polygon
+from shapely.ops import transform
+from rtree import index
+from collections import defaultdict
+
+
+# Projector for WGS84 → Web Mercator (meters)
+project = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True).transform
+
+def to_polygon(bounds):
+    return Polygon([
+        (bounds.coords_northWest.lon, bounds.coords_northWest.lat),
+        (bounds.coords_northEast.lon, bounds.coords_northEast.lat),
+        (bounds.coords_southEast.lon, bounds.coords_southEast.lat),
+        (bounds.coords_southWest.lon, bounds.coords_southWest.lat),
+        (bounds.coords_northWest.lon, bounds.coords_northWest.lat)
+    ])
+
+def to_projected(polygon):
+    return transform(project, polygon)
+
+def build_rtree(polygons):
+    idx = index.Index()
+    for i, poly in enumerate(polygons):
+        idx.insert(i, poly.bounds)
+    return idx
+
+def find_overlapping_chunks(bounds_list, threshold=0.3):
+    projected_polys = [to_projected(to_polygon(b)) for b in bounds_list]
+    rtree_idx = build_rtree(projected_polys)
+
+    overlaps = set()
+
+    for i, poly in enumerate(projected_polys):
+        for j in rtree_idx.intersection(poly.bounds):
+            if i >= j:
+                continue  # avoid duplicate or self comparison
+
+            poly_j = projected_polys[j]
+            if not poly.intersects(poly_j):
+                continue
+
+            intersection_area = poly.intersection(poly_j).area
+            min_area = min(poly.area, poly_j.area)
+            if min_area == 0:
+                continue
+
+            overlap_ratio = intersection_area / min_area
+            if overlap_ratio >= threshold:
+                overlaps.add((i, j, overlap_ratio))
+
+    return sorted(overlaps, key=lambda x: -x[2])
+
+def group_overlapping_chunks(overlap_pairs, num_chunks) -> list:
+    # Build adjacency list
+    graph = defaultdict(set)
+    for i, j, _ in overlap_pairs:
+        graph[i].add(j)
+        graph[j].add(i)
+
+    # DFS to find connected components
+    visited = set()
+    groups = []
+
+    def dfs(node, group):
+        visited.add(node)
+        group.add(node)
+        for neighbor in graph[node]:
+            if neighbor not in visited:
+                dfs(neighbor, group)
+
+    for i in range(num_chunks):
+        if i not in visited:
+            group = set()
+            dfs(i, group)
+            if group:
+                groups.append(group)
+
+    return groups
+
+def select_representatives(groups, bounds_list, criteria="min_index"):
+    selected = []
+
+    for group in groups:
+        if criteria == "min_index":
+            chosen = min(group)
+        elif criteria == "max_area":
+            chosen = max(group, key=lambda idx: to_projected(to_polygon(bounds_list[idx])).area)
+        else:
+            raise ValueError("Unknown criteria")
+        selected.append(chosen)
+
+    return selected
 
 class Coordinates:
     def __init__(self, lat : float, lon : float):
@@ -177,7 +271,7 @@ def create_json_info_file(result_dir : str, main_terrain_file_path : str, chunk_
 
     with open(json_file_path, 'w') as file:
         json.dump(json_data, file)
-    
+
 if __name__ == "__main__":
     # Create an ArgumentParser object
     parser = argparse.ArgumentParser(description="Process terrain chunks")
@@ -221,10 +315,32 @@ if __name__ == "__main__":
     for i in range(len(current_terrain_files_chunk_names)):
         current_terrain_files_chunk_names[i] = current_terrain_files_chunk_names[i].removesuffix('.png')
 
-    print('Processing terrain files...')
+    #find uniques
+    print("Processing terrain data for bounds...")
+    full_list_of_bounds = []
     for i in range(len(all_terrain_files)):
-        print(f'Processing: {i+1}/{len(all_terrain_files)} -- {all_terrain_files[i]}')
+        print(f'{i} / {len(all_terrain_files)}')
+
         file = all_terrain_files[i]
+        file_path = os.path.join(terrain_texture_dir, file)
+        extracted_file_working_path = os.path.join(tmp_dir, file[:-4])
+        chunk_name = file.split('.')[0]
+        bounds = get_full_bounds_for_terrain(chunk_name)
+        
+        full_list_of_bounds.append(bounds)
+
+    overlap_threshold = 0.3
+    print(f"Searching dataset for overlapping files with threshold of {overlap_threshold}")
+    overlaps = find_overlapping_chunks(full_list_of_bounds, overlap_threshold)
+    print("Grouping overlapping chunks...")
+    groups = group_overlapping_chunks(overlaps, len(full_list_of_bounds))
+    print("Selecting Representatives for overlaps")
+    selected_chunks = select_representatives(groups, full_list_of_bounds)
+
+    print('Processing representative terrain files...')
+    for i in range(len(selected_chunks)):
+        print(f'Processing: {i+1}/{len(selected_chunks)} -- {all_terrain_files[selected_chunks[i]]}')
+        file = all_terrain_files[selected_chunks[i]]
 
         file_path = os.path.join(terrain_texture_dir, file)
         extracted_file_working_path = os.path.join(tmp_dir, file[:-4])
@@ -232,14 +348,13 @@ if __name__ == "__main__":
 
         if chunk_name not in current_terrain_files_chunk_names:
             extracted_chunk_dir = extract_terrain_data(file_path, tmp_dir, chunk_name)
+            bounds = full_list_of_bounds[selected_chunks[i]]
 
-            bounds = get_full_bounds_for_terrain(chunk_name)
             terrain_result_ortho = copy_ortho_image(output_dir, extracted_chunk_dir, chunk_name, scale_factor)
 
             #create terrain data
             rel_path = os.path.relpath(terrain_result_ortho, start=output_dir)
             core_texture_name = os.path.splitext(os.path.basename(rel_path))[0]
-
             processed_chunk_data.append(Terrain_Data(
                 chunk_name,
                 core_texture_name, 
@@ -247,10 +362,7 @@ if __name__ == "__main__":
     
     full_result_file_path = os.path.join(output_dir, os.path.basename(elevation_file))
 
-    if scale_factor == 1.0:
-        shutil.copy(elevation_file, full_result_file_path)
-    else:
-        pass
+    shutil.copy(elevation_file, full_result_file_path)
         
     rel_result_path = os.path.relpath(full_result_file_path, start=output_dir)
     
