@@ -10,3 +10,9 @@ The following python packages are required:
 - pyproj
 - shapely
 - rtree
+- beautifulsoup4
+
+```cmd
+python -m pip install rasterio pillow pyproj shapely rtree beautifulsoup4
+```
+

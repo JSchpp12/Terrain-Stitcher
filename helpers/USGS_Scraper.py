@@ -86,7 +86,7 @@ class USGS_ScrapedData:
         return (lat, lon)
 
     def parse(url): 
-        response = requests.get(url)
+        response = requests.get(url, timeout=5)
         html_content = response.text
         soup = BeautifulSoup(html_content, 'html.parser')
 
@@ -100,6 +100,7 @@ class USGS_ScrapedData:
         self.coords_center = None
 
         url = f"https://earthexplorer.usgs.gov/scene/metadata/full/{project_id}/{full_chunk_name}/"
+        print(f"Query url: {url}")
         self.soup = USGS_ScrapedData.parse(url)
 
         if not USGS_ScrapedData.is_valid_response(self.soup):
@@ -110,6 +111,8 @@ class USGS_ScrapedData:
         self.coords_southEast = USGS_ScrapedData.getCoords_southEast(self.soup)
         self.coords_southWest = USGS_ScrapedData.getCoords_southWest(self.soup)
         self.coords_center = USGS_ScrapedData.getCoords_center(self.soup)
+
+        print("Done")
 
 if __name__ == "__main__": 
     pass 
