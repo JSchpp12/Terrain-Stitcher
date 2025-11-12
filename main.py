@@ -273,19 +273,14 @@ def create_json_info_file(result_dir : str, main_terrain_file_path : str, chunk_
         json.dump(json_data, file)
 
 if __name__ == "__main__":
-    # Create an ArgumentParser object
     parser = argparse.ArgumentParser(description="Process terrain chunks")
     
-    # Add arguments for the texture directory, elevation file, and output directory
     parser.add_argument('-textureDir', '--terrainTextureDir', type=str, required=True, help='The path to the directory containing the terrain textures')
     parser.add_argument('-elevationFile', '--terrainElevationFile', type=str, required=True, help='The path to the elevation file for terrain processing')
     parser.add_argument('-output', '--outputDir', type=str, default='result', help='The path to the output directory for the results (default: result)')
     parser.add_argument('-scale', '--scaleFactor', type=float, default=1.0, help='Resolution scale to apply to terrain images')
-
-    # Parse the command line arguments
     args = parser.parse_args()
     
-    # Access the texture directory, elevation file, and output directory from the parsed arguments
     terrain_texture_dir = os.path.join(os.getcwd(), args.terrainTextureDir)
     if not os.path.exists(terrain_texture_dir):
         raise Exception("Terrain texture directory must be provided")

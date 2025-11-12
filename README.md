@@ -11,8 +11,24 @@ The following python packages are required:
 - shapely
 - rtree
 - beautifulsoup4
+- requests
 
 ```cmd
-python -m pip install rasterio pillow pyproj shapely rtree beautifulsoup4
+python -m pip install rasterio pillow pyproj shapely rtree beautifulsoup4 requests
 ```
 
+### Troubleshooting
+
+#### Windows
+
+Missing DLL error on rasterio import. The most straightforward way to properly setup rasterio on windows is to first install gdal with conda 
+
+```cmd
+conda install -c conda-forge gdal
+```
+
+Then install rasterio with pip
+
+```cmd
+python -m pip install rasterio
+```
