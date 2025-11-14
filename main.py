@@ -6,6 +6,8 @@ import shutil
 import math
 import pyproj
 
+import concurrent.futures
+
 from zipfile import ZipFile
 from PIL import Image as pImage
 
@@ -272,6 +274,45 @@ def create_json_info_file(result_dir : str, main_terrain_file_path : str, chunk_
     with open(json_file_path, 'w') as file:
         json.dump(json_data, file)
 
+def process_terrain_file(terrain_file : str):
+    print(f'{terrain_file}')
+
+    chunk_name = terrain_file.split('.')[0]
+    bounds = get_full_bounds_for_terrain(chunk_name)
+
+    return bounds
+    
+def process_all(all_terrain_files, workers : int = 20): 
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        results = list(executor.map(process_terrain_file, all_terrain_files))
+
+    return results
+
+def process_overlaps(selected_chunks): 
+    print('Processing representative terrain files...')
+    for i in range(len(selected_chunks)):
+        print(f'Processing: {i+1}/{len(selected_chunks)} -- {all_terrain_files[selected_chunks[i]]}')
+        file = all_terrain_files[selected_chunks[i]]
+
+        file_path = os.path.join(terrain_texture_dir, file)
+        chunk_name = file.split('.')[0]
+
+        if chunk_name not in current_terrain_files_chunk_names:
+            extracted_chunk_dir = extract_terrain_data(file_path, tmp_dir, chunk_name)
+            bounds = full_list_of_bounds[selected_chunks[i]]
+
+            terrain_result_ortho = copy_ortho_image(output_dir, extracted_chunk_dir, chunk_name, scale_factor)
+
+            #create terrain data
+            rel_path = os.path.relpath(terrain_result_ortho, start=output_dir)
+            core_texture_name = os.path.splitext(os.path.basename(rel_path))[0]
+            processed_chunk_data.append(Terrain_Data(
+                chunk_name,
+                core_texture_name, 
+                bounds))
+            
+    return processed_chunk_data
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process terrain chunks")
     
@@ -312,17 +353,7 @@ if __name__ == "__main__":
 
     #find uniques
     print("Processing terrain data for bounds...")
-    full_list_of_bounds = []
-    for i in range(len(all_terrain_files)):
-        print(f'{i} / {len(all_terrain_files)}')
-
-        file = all_terrain_files[i]
-        file_path = os.path.join(terrain_texture_dir, file)
-        extracted_file_working_path = os.path.join(tmp_dir, file[:-4])
-        chunk_name = file.split('.')[0]
-        bounds = get_full_bounds_for_terrain(chunk_name)
-        
-        full_list_of_bounds.append(bounds)
+    full_list_of_bounds = process_all(all_terrain_files)
 
     overlap_threshold = 0.3
     print(f"Searching dataset for overlapping files with threshold of {overlap_threshold}")
@@ -332,29 +363,8 @@ if __name__ == "__main__":
     print("Selecting Representatives for overlaps")
     selected_chunks = select_representatives(groups, full_list_of_bounds)
 
-    print('Processing representative terrain files...')
-    for i in range(len(selected_chunks)):
-        print(f'Processing: {i+1}/{len(selected_chunks)} -- {all_terrain_files[selected_chunks[i]]}')
-        file = all_terrain_files[selected_chunks[i]]
+    finalized_chunks = process_overlaps(selected_chunks)
 
-        file_path = os.path.join(terrain_texture_dir, file)
-        extracted_file_working_path = os.path.join(tmp_dir, file[:-4])
-        chunk_name = file.split('.')[0]
-
-        if chunk_name not in current_terrain_files_chunk_names:
-            extracted_chunk_dir = extract_terrain_data(file_path, tmp_dir, chunk_name)
-            bounds = full_list_of_bounds[selected_chunks[i]]
-
-            terrain_result_ortho = copy_ortho_image(output_dir, extracted_chunk_dir, chunk_name, scale_factor)
-
-            #create terrain data
-            rel_path = os.path.relpath(terrain_result_ortho, start=output_dir)
-            core_texture_name = os.path.splitext(os.path.basename(rel_path))[0]
-            processed_chunk_data.append(Terrain_Data(
-                chunk_name,
-                core_texture_name, 
-                bounds))
-    
     full_result_file_path = os.path.join(output_dir, os.path.basename(elevation_file))
 
     shutil.copy(elevation_file, full_result_file_path)
