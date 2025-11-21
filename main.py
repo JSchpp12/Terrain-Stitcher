@@ -10,6 +10,7 @@ import concurrent.futures
 
 from zipfile import ZipFile
 from PIL import Image as pImage
+from dotenv import load_dotenv
 
 from constants import USGS_Helpers
 from helpers import USGS_Scraper
@@ -17,6 +18,10 @@ from shapely.geometry import Polygon
 from shapely.ops import transform
 from rtree import index
 from collections import defaultdict
+
+
+def get_target_terrains(lat : double, long : double): 
+    pass
 
 
 # Projector for WGS84 → Web Mercator (meters)
