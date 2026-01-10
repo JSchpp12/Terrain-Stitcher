@@ -19,11 +19,6 @@ from shapely.ops import transform
 from rtree import index
 from collections import defaultdict
 
-
-def get_target_terrains(lat : double, long : double): 
-    pass
-
-
 # Projector for WGS84 → Web Mercator (meters)
 project = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True).transform
 
@@ -316,6 +311,7 @@ def process_overlaps(selected_chunks):
                 core_texture_name, 
                 bounds))
             
+            shutil.rmtree(extracted_chunk_dir)
     return processed_chunk_data
 
 if __name__ == "__main__":

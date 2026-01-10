@@ -86,7 +86,7 @@ class USGS_ScrapedData:
         return (lat, lon)
 
     def parse(url): 
-        response = requests.get(url, timeout=5)
+        response = requests.get(url, timeout=50)
         html_content = response.text
         soup = BeautifulSoup(html_content, 'html.parser')
 
