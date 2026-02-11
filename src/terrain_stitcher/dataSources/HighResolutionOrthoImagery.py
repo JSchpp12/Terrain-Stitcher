@@ -302,6 +302,5 @@ class HighResolutionOrthoImagery(DataSource):
             entityID = allChunks[selected[i]].record["entityId"]
             info = DataInfo(entityID, self.name, imageWriter)
             request.addDataInfo(info)
-            break
 
         return request
