@@ -16,7 +16,6 @@ project = pyproj.Transformer.from_crs(
     "EPSG:4326", "EPSG:3857", always_xy=True
 ).transform
 
-
 def get_aerial_photography_datasets(usgs, bounding_box: World_Coordinates):
     aDatasets = []
 
@@ -124,18 +123,15 @@ class ImageDataWriter(DataInfoWriter):
                 return jData['imageFileName']
         return None
 
-    def writeFileContents(self, downloadDirPath, downloadedFile):
-        fPath = os.path.join(downloadDirPath, self.getURLFilePath())
+    def writeFileContents(self, downloadDirPath, downloadedFile, dataFilePath):
+        fPath = os.path.join(downloadDirPath, dataFilePath)
         self.imageFileName = downloadedFile
 
         with open(fPath, "w") as jsonFile: 
             json.dump(self.toJSON(), jsonFile, indent=4)
 
-    def hasDataAlreadyBeenDownloaded(self, downloadDirPath): 
-        if self.url is None:
-            raise Exception("url file path was never set")
-
-        dataInfoFile = os.path.join(downloadDirPath, self.getURLFilePath())
+    def hasDataAlreadyBeenDownloaded(self, downloadDirPath : str, dataFilePath : str) -> bool: 
+        dataInfoFile = os.path.join(downloadDirPath, dataFilePath)
         if os.path.isfile(dataInfoFile): 
             mediaFilePath = ImageDataWriter.ExtractImageFileName(dataInfoFile)
             
@@ -303,7 +299,9 @@ class HighResolutionOrthoImagery(DataSource):
         for i in range(len(selected)):
             bounds = HighResolutionOrthoImagery.ExtractBounds(allChunks[selected[i]].record)
             imageWriter = ImageDataWriter(bounds)
-            info = DataInfo(allChunks[selected[i]].record["entityId"], imageWriter)
+            entityID = allChunks[selected[i]].record["entityId"]
+            info = DataInfo(entityID, self.name, imageWriter)
             request.addDataInfo(info)
+            break
 
         return request

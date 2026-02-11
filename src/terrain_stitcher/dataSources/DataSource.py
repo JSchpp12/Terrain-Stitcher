@@ -18,37 +18,30 @@ FAILED_DOWNLOADS = []
 
 class DataInfoWriter: 
     def __init__(self) -> None:
-        self.url = None
         pass
-
-    def setURL(self, url):
-        self.url = url
-    
-    def getURLFilePath(self):
-        if self.url is None:
-            raise Exception("URL was never set")
-        return self.url.split("https://")[1].replace('/', '_') + ".txt"
     
     @abstractmethod
-    def writeFileContents(self, downloadDirPath, downloadedFileName : str): 
+    def writeFileContents(self, downloadDirPath, downloadedFileName : str, dataFilePath : str): 
         pass
 
     @abstractmethod
-    def hasDataAlreadyBeenDownloaded(self, downloadDirPath): 
+    def hasDataAlreadyBeenDownloaded(self, downloadDirPath : str, dataFilePath : str) -> bool: 
         pass
 
 class DataInfo: 
-    def __init__(self, entityId, infoWriter : DataInfoWriter): 
+    def __init__(self, entityId, datasetName, infoWriter : DataInfoWriter): 
         self.entityId = entityId
+        self.datasetName = datasetName
         self.infoWriter = infoWriter
-        self.url = None
-    
-    def setURL(self, url): 
-        self.url = url
-        self.infoWriter.setURL(url)
 
     def writeDataInfoFileContents(self, downloadDirPath, downloadedFileName): 
-        self.infoWriter.writeFileContents(downloadDirPath, downloadedFileName)
+        self.infoWriter.writeFileContents(downloadDirPath, downloadedFileName, self.getDataFilePath())
+
+    def getDataFilePath(self):
+        return f"{self.datasetName}-{self.entityId}.txt"
+
+    def hasDataInfoAlreadyBeenDownloaded(self, downloadDirPath) -> bool: 
+        return self.infoWriter.hasDataAlreadyBeenDownloaded(downloadDirPath, self.getDataFilePath())
         
 class DataDownloadRequest:
     def __init__(self, datasetName):
@@ -61,7 +54,7 @@ class DataDownloadRequest:
 class DownloadAttempt:
     def __init__(self, url, dataInfo : DataInfo) -> None:
         self.dataInfo = dataInfo
-        self.dataInfo.setURL(url)
+        self.url = url
         self.numAttempts = 0
 
 # make this class virtual
@@ -79,9 +72,9 @@ class DataSource:
     def DownloadFile(download : DownloadAttempt, path : str):
         SEMAPHORES.acquire()
         try:
-            print(f"Downloading: {download.dataInfo.url}")
-            response = requests.get(download.dataInfo.url)
-            print(f"Response received: {download.dataInfo.url}")
+            print(f"Downloading: {download.url}")
+            response = requests.get(download.url)
+            print(f"Response received: {download.url}")
 
             disposition = response.headers['content-disposition']
             filename = re.findall("filename=(.+)", disposition)[0].strip("\"")
@@ -91,9 +84,9 @@ class DataSource:
                 file.write(response.content)
             print(f"Download Done: {filename}")
 
-            print(f"Writing data info file: {download.dataInfo.infoWriter.getURLFilePath()}")
-            download.dataInfo.infoWriter.writeFileContents(path, filename)
-            print(f"Done: {download.dataInfo.infoWriter.getURLFilePath()}")
+            print(f"Writing data info file: {download.dataInfo.getDataFilePath()}")
+            download.dataInfo.writeDataInfoFileContents(path, filename)
+            print(f"Done: {download.dataInfo.getDataFilePath()}")
 
             SEMAPHORES.release()
         except Exception as ex: 
@@ -106,12 +99,12 @@ class DataSource:
                 print("Will retry") 
                 DataSource.QueueDownload(download, path)
             else:
-                print(f"Maximum attempt for object with url: {download.dataInfo.url}")
+                print(f"Maximum attempt for object with url: {download.url}")
                 FAILED_DOWNLOADS.append(download)
 
     @staticmethod
     def HasDownloadBeenProcessed(download : DownloadAttempt, path) -> bool: 
-        return download.dataInfo.infoWriter.hasDataAlreadyBeenDownloaded(path)
+        return download.dataInfo.hasDataInfoAlreadyBeenDownloaded(path)
     
     @staticmethod
     def QueueDownload(download : DownloadAttempt, path): 

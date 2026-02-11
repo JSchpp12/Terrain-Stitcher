@@ -1,12 +1,18 @@
 [build-system]
-requires = ["setuptools>=69"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling >= 1.26"]
+build-backend = "hatchling.build"
 
 [project]
-name = "terrain_pkg"
+name = "terrain_stitcher"
 version = "0.1.0"
 description = "Terrain Scraper"
 requires-python = ">=3.9"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[project.scripts]
+terrain_stitcher = "terrain_stitcher.cli:main"
+
+[tools.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/terrain_stitcher"]

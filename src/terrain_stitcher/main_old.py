@@ -1,26 +1,9 @@
 import argparse
 import math
 
-from terrain_pkg.DataSources import HighResolutionOrthoImagery, DataSource
+from terrain_pkg.dataSources import HighResolutionOrthoImagery, DataSource
 from terrain_pkg.usgs import Client
 from terrain_pkg.common import World_Coordinates, Latitude, Longitude, World_Bounding_Box
-
-def calculate_bounding_box(center : World_Coordinates, radius_miles : int = 10) -> World_Bounding_Box:
-    # Extract latitude and longitude
-    lat = center.get_lat()
-    lon = center.get_lon()
-    
-    # Convert miles to degrees
-    lat_offset = radius_miles / 69.0
-    lon_offset = radius_miles / (69.0 * math.cos(math.radians(lat)))
-    
-    # Calculate bounding box
-    min_lat = lat - lat_offset
-    max_lat = lat + lat_offset
-    min_lon = lon - lon_offset
-    max_lon = lon + lon_offset
-
-    return World_Bounding_Box(World_Coordinates(min_lat, min_lon), World_Coordinates(max_lat, max_lon))
 
 class ImageChunk: 
     def __init__(self, entityID, spatialBounds): 
