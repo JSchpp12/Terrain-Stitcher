@@ -1,5 +1,7 @@
 import argparse
 
+from terrain_stitcher.functions import main_ortho
+
 def addCreateBoundsGeneratorArgs(subparser): 
     parserGenerate = subparser.add_parser("create-bounds")
 
@@ -12,16 +14,19 @@ def addDownloadOrthoArgs(subparser):
     
     parserGenerate.add_argument("-s", "--shape", help="Shape file defining area for generation")
 
-
 def main(): 
     parser = argparse.ArgumentParser(prog="TerrainStitcher", description="Entrypoint for terrain stitcher tools")
 
-    subparser = parser.add_argument(dest="command")
+    subparser = parser.add_subparsers(dest="command")
 
     addCreateBoundsGeneratorArgs(subparser)
     addDownloadOrthoArgs(subparser)
 
-    if subparser.command == "create-bounds": 
+    args = parser.parse_args()
+
+    if args.command == "create-bounds": 
         pass
-    elif subparser.command == "gather-ortho": 
-        pass
+    elif args.command == "gather-ortho": 
+        main_ortho(args)
+    else:
+        print("Unknown command type")
