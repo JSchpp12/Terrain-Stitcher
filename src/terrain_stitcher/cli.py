@@ -1,6 +1,6 @@
 import argparse
 
-from terrain_stitcher.functions import main_ortho
+from terrain_stitcher.functions import main_ortho, main_shape
 
 def addCreateBoundsGeneratorArgs(subparser): 
     parserGenerate = subparser.add_parser("create-bounds")
@@ -25,8 +25,8 @@ def main():
     args = parser.parse_args()
 
     if args.command == "create-bounds": 
-        pass
+        main_shape(args.lat, args.lon, args.type)
     elif args.command == "gather-ortho": 
-        main_ortho(args)
+        main_ortho(args.shape)
     else:
         print("Unknown command type")

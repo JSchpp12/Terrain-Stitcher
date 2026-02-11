@@ -56,6 +56,10 @@ class World_Coordinates:
             "lat": self.lat, 
             "lon": self.lon
         }
+    
+    @classmethod
+    def fromDict(cls, data):
+        return cls(data['lat'], data['lon'])
 
 class World_Bounding_Box:
     def __init__(

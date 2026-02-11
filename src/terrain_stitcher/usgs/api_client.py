@@ -4,7 +4,7 @@ import json
 import sys
 
 from .config import USGS_APPLICATION_KEY, USGS_USERNAME
-from terrain_pkg.common import World_Bounding_Box
+from terrain_stitcher.common import World_Bounding_Box
 
 SERVICE_URL = "https://m2m.cr.usgs.gov/api/api/json/stable/"
 

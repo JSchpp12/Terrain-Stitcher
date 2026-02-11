@@ -1,26 +1,14 @@
 import argparse
 import math
 
-from terrain_pkg.dataSources import HighResolutionOrthoImagery, DataSource
-from terrain_pkg.usgs import Client
-from terrain_pkg.common import World_Coordinates, Latitude, Longitude, World_Bounding_Box
+from terrain_stitcher.dataSources import HighResolutionOrthoImagery, DataSource
+from terrain_stitcher.usgs import Client
+from terrain_stitcher.common import World_Coordinates, Latitude, Longitude, World_Bounding_Box
 
 class ImageChunk: 
     def __init__(self, entityID, spatialBounds): 
         self.entityID = entityID
         self.spatialBounds = spatialBounds
-
-class Scraper:
-    def __init__(self): 
-        self.parsers = []
-
-    def add_parser(self, parser : DataSource): 
-        self.parsers.append(parser)
-
-    def run(self, bounding_box : World_Coordinates):
-        with Client() as usgsClient: 
-            for parser in self.parsers: 
-                parser.execute(usgsClient, bounding_box)
 
 def main():
     parser = argparse.ArgumentParser(

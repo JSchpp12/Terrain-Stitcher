@@ -2,8 +2,8 @@ from abc import ABC, abstractmethod
 from typing import List
 import datetime
 
-from terrain_pkg.usgs import Client
-from terrain_pkg.common import World_Coordinates
+from terrain_stitcher.usgs import Client
+from terrain_stitcher.common import World_Coordinates
 
 import threading
 import os
@@ -221,3 +221,15 @@ class DataSource:
         print(f"Num of requests to process: {len(requests.dataInfos)}")
 
         self.processDownloads(usgsClient, requests)
+
+class Scraper:
+    def __init__(self): 
+        self.parsers = []
+
+    def add_parser(self, parser : DataSource): 
+        self.parsers.append(parser)
+
+    def run(self, bounding_box : World_Coordinates):
+        with Client() as usgsClient: 
+            for parser in self.parsers: 
+                parser.execute(usgsClient, bounding_box)

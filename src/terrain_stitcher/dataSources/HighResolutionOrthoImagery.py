@@ -8,8 +8,8 @@ from collections import defaultdict
 from rtree import index
 
 from .DataSource import DataSource, DataDownloadRequest, DataInfoWriter, DataInfo
-from terrain_pkg.usgs import Client
-from terrain_pkg.common import World_Coordinates
+from terrain_stitcher.usgs import Client
+from terrain_stitcher.common import World_Coordinates
 
 # Projector for WGS84 → Web Mercator (meters)
 project = pyproj.Transformer.from_crs(

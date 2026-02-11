@@ -1,4 +1,5 @@
 import math
+import json
 
 from .TerrainArea import World_Bounding_Box, World_Coordinates
 
@@ -39,12 +40,21 @@ class ParseArea:
         self.center = center
 
     @classmethod
+    def fromJSONFile(cls, filePath): 
+        with open(filePath, 'r') as file:
+            jData = json.load(file)
+            bounds = nameToTerrainBoundsType(jData['boundsType'])
+            return cls(bounds, World_Coordinates.fromDict(jData['center']))
+        
     def toJSON(self) -> dict: 
         return {
-            'boundsType': terrainBoundsTypeToString(self.boundsType)
+            'boundsType': terrainBoundsTypeToString(self.boundsType),
+            'center': self.center.toJSON()
         }
     
     def getTotalRegion(self) -> World_Bounding_Box: 
-        if self.boundsType == TerrainBoundsCalculateType.POINT: 
+        if self.boundsType is TerrainBoundsCalculateType.POINT: 
             return calculate_bounding_box_around_point(self.center, 10)
+        else:
+            raise Exception("Unhandled boundsType declaration")
     
