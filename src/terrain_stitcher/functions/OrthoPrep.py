@@ -124,7 +124,7 @@ def createInfoFile(infoFilePath, chunkInfos, imageFileNameToImageInfo):
         imageInfo = imageFileNameToImageInfo[infoName]
 
         imageData = {
-            "name": info, 
+            "name": infoName, 
             "bounds": imageInfo.bounds.toJSON()
         }
         data['images'].append(imageData)
