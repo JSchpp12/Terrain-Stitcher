@@ -19,6 +19,13 @@ project = pyproj.Transformer.from_crs(
 def get_aerial_photography_datasets(usgs, bounding_box: World_Coordinates):
     aDatasets = []
 
+    prime = []
+    test_datasets = usgs.find_datasets_for(bounding_box)
+    for test in test_datasets: 
+        if test['abstractText'] is not None and "NED" in test['abstractText']:
+            prime.append(test)
+
+
     datasets = usgs.find_datasets_for(bounding_box, "high_res_ortho")
     for dataset in datasets:
         if (

@@ -17,11 +17,12 @@ class ExtractData:
         self.outputDir = outputDir
 
 class CopyData: 
-    def __init__(self, extractedFileRootDir, outputDir, chunkName, scaleFactor) -> None: 
+    def __init__(self, extractedFileRootDir, outputDir, chunkName, scaleFactor, compressedDataInfo) -> None: 
         self.extractedFileRootDir = extractedFileRootDir
         self.outputDir = outputDir
         self.chunkName = chunkName
         self.scaleFactor = scaleFactor
+        self.compressedDataInfo = compressedDataInfo
 
 def extractImageDataFile(data : ExtractData) -> str: 
     if not os.path.isfile(data.compressedFilePath):
@@ -90,14 +91,21 @@ def copyOrthoImage(copyData : CopyData) -> str:
         im = im.resize((int(new_width), int(new_height)), resample=pImage.LANCZOS)
 
     im.save(dst_ortho_path)
+
+    #also copy the data file too in case its needed later
+    infoFileName = copyData.chunkName + ".json"
+    finalInfoPath = os.path.join(copyData.outputDir, infoFileName)
+    with open(finalInfoPath, 'w') as fJson: 
+        json.dump(copyData.compressedDataInfo.toJSON(), fJson)
+
     return dst_ortho_path
 
-def copyAllOrthoImages(extractedImageRootDirPaths, outputDir, scaleFactor=1.0): 
+def copyAllOrthoImages(extractedImageRootDirPaths, outputDir, nameToImageWriteData, scaleFactor=1.0): 
     copyDatas = []
     for path in extractedImageRootDirPaths:
         file = os.path.basename(path)
         chunkName = file.split('.')[0]
-        copyDatas.append(CopyData(path, outputDir, chunkName, scaleFactor))
+        copyDatas.append(CopyData(path, outputDir, chunkName, scaleFactor, nameToImageWriteData[chunkName]))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
         results = list(executor.map(copyOrthoImage, copyDatas))
@@ -108,6 +116,9 @@ def createInfoFile(infoFilePath, chunkInfos, imageFileNameToImageInfo):
     data = {}
 
     data['images'] = []
+    data['full_terrain_file'] = "USGS_13_n40w083_20230911.tif"
+    
+
     for info in chunkInfos: 
         infoName = str(os.path.basename(info)).removesuffix(".png")
         imageInfo = imageFileNameToImageInfo[infoName]
@@ -142,7 +153,7 @@ def main(inputDir, outputDir):
 
     #copy orthoimage files
     print("Processing image files...")
-    copyFiles = copyAllOrthoImages(extractedPaths, outputDir, 0.1)
+    copyFiles = copyAllOrthoImages(extractedPaths, outputDir, imageFileNameToImageInfo, 0.1)
     print("Done")
 
     print("Finalizing dataset info...")
