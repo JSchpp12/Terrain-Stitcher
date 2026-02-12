@@ -66,6 +66,16 @@ class Bounds:
             'southWest': self.coords_southWest.toJSON(),
             'northWest': self.coords_northWest.toJSON() 
         }
+    
+    @classmethod
+    def fromDict(cls, data): 
+        center = World_Coordinates.fromDict(data['center'])
+        northEast = World_Coordinates.fromDict(data['northEast'])
+        southEast = World_Coordinates.fromDict(data['southEast'])
+        southWest = World_Coordinates.fromDict(data['southWest'])
+        northWest = World_Coordinates.fromDict(data['northWest'])
+
+        return cls(northEast, southEast, southWest, northWest, center)
 
 def buildRTree(polygons):
     idx = index.Index()
@@ -97,9 +107,9 @@ def toPolygon(terrainChunk: Terrain_Data):
     )
 
 class ImageDataWriter(DataInfoWriter):
-    def __init__(self, bounds : Bounds):
+    def __init__(self, bounds : Bounds, imageFileName = None):
         self.bounds = bounds 
-        self.imageFileName = None
+        self.imageFileName = imageFileName
 
         super().__init__() 
 
@@ -122,6 +132,12 @@ class ImageDataWriter(DataInfoWriter):
             if 'imageFileName' in jData: 
                 return jData['imageFileName']
         return None
+    
+    @classmethod
+    def fromDict(cls, data): 
+        bounds = Bounds.fromDict(data['bounds'])
+        imageFileName = data['imageFileName']
+        return cls(bounds, imageFileName)
 
     def writeFileContents(self, downloadDirPath, downloadedFile, dataFilePath):
         fPath = os.path.join(downloadDirPath, dataFilePath)

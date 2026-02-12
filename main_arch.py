@@ -126,18 +126,6 @@ class Terrain_Data:
         self.orthoTexturePath = orthoTexturePath
         self.bounds = bounds
     
-def find_file(directory, file_name):
-    for ele in os.listdir(directory):
-        full_ele = os.path.join(directory, ele)
-
-        if file_name == ele:
-            return os.path.join(directory, file_name)
-        elif os.path.isdir(full_ele):
-            deep_search = find_file(full_ele, file_name)
-            if deep_search is not None:
-                return deep_search
-    return None
-
 
 def get_window_bounds(focus_area_bounds : Bounds, source_bounds, image_size):
     """Convert lat/lon coordinates to pixel coordinates
@@ -222,23 +210,6 @@ def cutout_terrain_area_from_main_elevation_data(full_elevation_data_path : str,
             dest.write(cropped_geotiff)
 
     return cropped_path
-
-def copy_ortho_image(result_dir : str, working_dir : str, chunk_name : str, scale_factor : float) -> str:
-    shortened_chunk_name = chunk_name.split('_')[-1]
-
-    #work through directory to find file
-    src_ortho_path = find_file(working_dir, f"{shortened_chunk_name}.tif")
-    dst_ortho_path = os.path.join(result_dir, f"{chunk_name}.png")
-
-    im = pImage.open(src_ortho_path)
-
-    if scale_factor != 1.0:
-        new_width = im.width * scale_factor
-        new_height = im.height * scale_factor
-        im = im.resize((int(new_width), int(new_height)), resample=pImage.LANCZOS)
-
-    im.save(dst_ortho_path)
-    return dst_ortho_path
 
 def create_json_info_file(result_dir : str, main_terrain_file_path : str, chunk_infos) -> None: 
     json_data = {}
