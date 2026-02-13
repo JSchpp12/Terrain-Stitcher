@@ -19,7 +19,8 @@ python -m pip install rasterio pillow pyproj shapely rtree beautifulsoup4 reques
 
 ## Setup
 Create a `.env` file with:
-USGS_API_KEY=your_api_key_here
+USGS_APPLICATION_KEY=your_api_key_here
+USGS_USERNAME=
 
 ### Troubleshooting
 

@@ -1,5 +1,4 @@
 import requests
-import threading
 import json
 import sys
 
@@ -16,7 +15,7 @@ class Client:
         json_data = json.dumps(data)
 
         if apiKey == None:
-            response = requests.post(url, json_data)
+            response = requests.post(url, json_data, timeout=2)
         else:
             headers = {"X-Auth-Token": apiKey}
             response = requests.post(url, json_data, headers=headers)
@@ -61,6 +60,8 @@ class Client:
     def Authorize_Login():
         payload = {"username": USGS_USERNAME, "token": USGS_APPLICATION_KEY}
         endpoint = "login-token"
+        print(f"Attempting to authorize client with username: {USGS_USERNAME}")
+        print(f"Key: {USGS_APPLICATION_KEY}")
         api_key = Client.Send_Request(endpoint, payload)
         return api_key
 
