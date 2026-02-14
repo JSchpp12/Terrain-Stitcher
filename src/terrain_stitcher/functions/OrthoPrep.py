@@ -132,7 +132,7 @@ def createInfoFile(infoFilePath, chunkInfos, imageFileNameToImageInfo):
     with open(infoFilePath, 'w') as file: 
         json.dump(data, file)
 
-def main(inputDir, outputDir):
+def main(inputDir, outputDir, scaleFactor):
     if not os.path.isdir(inputDir): 
         raise Exception("Input directory does not exist")
 
@@ -153,7 +153,7 @@ def main(inputDir, outputDir):
 
     #copy orthoimage files
     print("Processing image files...")
-    copyFiles = copyAllOrthoImages(extractedPaths, outputDir, imageFileNameToImageInfo, 0.1)
+    copyFiles = copyAllOrthoImages(extractedPaths, outputDir, imageFileNameToImageInfo, scaleFactor)
     print("Done")
 
     print("Finalizing dataset info...")

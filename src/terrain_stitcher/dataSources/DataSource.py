@@ -113,7 +113,7 @@ class DataSource:
             THREADS.append(thread)
             thread.start()
         else:
-            print(f"Skipping already downloaded file detected for {download.dataInfo.url}")
+            print(f"Skipping already downloaded file detected for {download.url}")
 
     @staticmethod
     def WaitForDone(): 
