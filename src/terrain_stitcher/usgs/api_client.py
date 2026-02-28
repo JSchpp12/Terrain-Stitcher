@@ -15,7 +15,7 @@ class Client:
         json_data = json.dumps(data)
 
         if apiKey == None:
-            response = requests.post(url, json_data, timeout=2)
+            response = requests.post(url, json_data, timeout=10)
         else:
             headers = {"X-Auth-Token": apiKey}
             response = requests.post(url, json_data, headers=headers)
