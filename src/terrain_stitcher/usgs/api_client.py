@@ -135,7 +135,7 @@ class Client:
         datasets = Client.Send_Request("dataset-search", payload, self.api_key)
         return datasets
 
-    def find_scenes(self, dataset, bounding_box: World_Bounding_Box):
+    def find_scenes(self, dataset, bounding_box: World_Bounding_Box, acquisition_filter = None):
         spatial_filter = {
             "filterType": "mbr",
             "lowerLeft": {
@@ -151,8 +151,10 @@ class Client:
         name = dataset["datasetAlias"]
         payload = {
             "datasetName": name,
-            "maxResults": 1000,
+            "maxResults": 3000,
             "sceneFilter": {"spatialFilter": spatial_filter}}
+        if acquisition_filter is not None: 
+            payload["acquisitionFilter"] = acquisition_filter
 
         scenes = Client.Send_Request("scene-search", payload, self.api_key)
 

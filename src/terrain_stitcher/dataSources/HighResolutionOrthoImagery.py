@@ -243,15 +243,18 @@ class HighResolutionOrthoImagery(DataSource):
 
     @staticmethod
     def GroupOverlappingChunks(overlapPairs, numChunks) -> list:
-        # Build adjacency list
+        # Only group chunks that directly overlap
+        # Isolated chunks (no overlap) are kept as their own singleton
+        merged = set()
+        groups = []
+
+        # Build adjacency from direct overlap pairs only
         graph = defaultdict(set)
         for i, j, _ in overlapPairs:
             graph[i].add(j)
             graph[j].add(i)
 
-        # DFS to find connected components
         visited = set()
-        groups = []
 
         def dfs(node, group):
             visited.add(node)
@@ -260,15 +263,20 @@ class HighResolutionOrthoImagery(DataSource):
                 if neighbor not in visited:
                     dfs(neighbor, group)
 
-        for i in range(numChunks):
-            if i not in visited:
+        # Only run DFS on nodes that actually have overlaps
+        for node in graph:
+            if node not in visited:
                 group = set()
-                dfs(i, group)
-                if group:
-                    groups.append(group)
+                dfs(node, group)
+                groups.append(group)
+                merged.update(group)
+
+        # Add all non-overlapping chunks as singletons
+        for i in range(numChunks):
+            if i not in merged:
+                groups.append({i})
 
         return groups
-
     @staticmethod
     def SelectRepresentatives(groups, boundsList, criteria="min_index"):
         selected = []
@@ -290,7 +298,9 @@ class HighResolutionOrthoImagery(DataSource):
         self, usgsClient: Client, coords: World_Coordinates
     ) -> DataDownloadRequest:
         aerial_dataset = get_aerial_photography_datasets(usgsClient, coords)
-        scenes = usgsClient.find_scenes(aerial_dataset, coords)
+        
+        acquisition_filter = {"start": "2004-01-01", "end": "2005-01-01"}
+        scenes = usgsClient.find_scenes(aerial_dataset, coords, acquisition_filter)
 
         # use same logic as before
         request = DataDownloadRequest(self.name)
@@ -302,9 +312,10 @@ class HighResolutionOrthoImagery(DataSource):
                 Terrain_Data(scene, HighResolutionOrthoImagery.ExtractBounds(scene))
             )
         print("Done")
+        print(f"Number of total chunks: {len(allChunks)}")
 
         print("Processing overlaps")
-        overlaps = HighResolutionOrthoImagery.FindOverlappingChunks(allChunks, 0.3)
+        overlaps = HighResolutionOrthoImagery.FindOverlappingChunks(allChunks, 0.9)
         print("Done")
 
         print("Grouping overlaps")
