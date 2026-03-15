@@ -149,12 +149,14 @@ class Client:
         }
 
         name = dataset["datasetAlias"]
+        sceneFilter =  {"spatialFilter": spatial_filter}
+        if acquisition_filter is not None: 
+            sceneFilter["acquisitionFilter"] = acquisition_filter
         payload = {
             "datasetName": name,
             "maxResults": 3000,
-            "sceneFilter": {"spatialFilter": spatial_filter}}
-        if acquisition_filter is not None: 
-            payload["acquisitionFilter"] = acquisition_filter
+            "sceneFilter":sceneFilter
+        }
 
         scenes = Client.Send_Request("scene-search", payload, self.api_key)
 

@@ -133,22 +133,13 @@ class DataSource:
     @abstractmethod
     def onDone(self) -> None:
         pass
-
-    @staticmethod
-    def GetDownloadDir():
-        path = os.path.join(os.getcwd(), "tmpDownloadsHighResOrtho")
-        if not os.path.isdir(path):
-            os.mkdir(path)
-
-        return path
     
-    def requestAndProcessAllDownloads(self, usgsClient : Client, downloads, requests : DataDownloadRequest) -> int: 
+    def requestAndProcessAllDownloads(self, usgsClient : Client, downloads, requests : DataDownloadRequest, outputDir) -> int: 
         requestEntityIdToDownloadRequest = {}
 
         for dataInfo in requests.dataInfos: 
            requestEntityIdToDownloadRequest[dataInfo.entityId] = dataInfo
 
-        path = DataSource.GetDownloadDir()
         numRequestedDownload = len(downloads)
         timeLabel = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")  # Customized label using date timeLabel = 
         downloadRetrievePayload = {"downloads": downloads, "label": timeLabel}
@@ -171,14 +162,14 @@ class DataSource:
                     downloadIds.append(downloadId)
                     mappedDataRequestRecord = requestEntityIdToDownloadRequest[download['entityId']]
 
-                    DataSource.QueueDownload(DownloadAttempt(download['url'], mappedDataRequestRecord), path)
+                    DataSource.QueueDownload(DownloadAttempt(download['url'], mappedDataRequestRecord), outputDir)
 
             for download in moreDownloadUrls["requested"]: 
                 downloadId = str(download["downloadId"])
                 if downloadId in requestResults['newRecords'] or downloadId in requestResults['duplicateProducts']: 
                     mappedDataRequestRecord = requestEntityIdToDownloadRequest[download['entityId']]
 
-                    DataSource.QueueDownload(DownloadAttempt(download['url'], mappedDataRequestRecord), path)
+                    DataSource.QueueDownload(DownloadAttempt(download['url'], mappedDataRequestRecord), outputDir)
 
             while len(downloadIds) < (numRequestedDownload - (len(requestResults['failed']) + len(FAILED_DOWNLOADS))): 
                 preparingDownloads = numRequestedDownload - len(downloadIds) - len(requestResults['failed'])
@@ -192,19 +183,19 @@ class DataSource:
                         downloadIds.append(downloadId)
                         mappedDataRequestRecord = requestEntityIdToDownloadRequest[download['entityId']]
 
-                        DataSource.QueueDownload(DownloadAttempt(download['url'], mappedDataRequestRecord), path)
+                        DataSource.QueueDownload(DownloadAttempt(download['url'], mappedDataRequestRecord), outputDir)
 
         else:
             #just download all of them
             for download in requestResults['availableDownloads']: 
                 mappedDataRequestRecord = requestEntityIdToDownloadRequest[download['entityId']]
-                DataSource.QueueDownload(DownloadAttempt(download['url'], mappedDataRequestRecord), path)
+                DataSource.QueueDownload(DownloadAttempt(download['url'], mappedDataRequestRecord), outputDir)
 
         print("Downloading files... Please do not close the program\n")
         DataSource.WaitForDone()
         print("Download complete")
      
-    def processDownloads(self, usgsClient: Client, request: DataDownloadRequest):
+    def processDownloads(self, usgsClient: Client, request: DataDownloadRequest, outputDir : os.PathLike):
         entityIDs = []
         for r in request.dataInfos: 
             entityIDs.append(r.entityId)
@@ -219,9 +210,9 @@ class DataSource:
                 downloads.append({"entityId": product["entityId"], "productId": product["id"]})
 
         if downloads:
-            self.requestAndProcessAllDownloads(usgsClient, downloads, request)
+            self.requestAndProcessAllDownloads(usgsClient, downloads, request, outputDir)
 
-    def execute(self, usgsClient: Client, coords: World_Coordinates):
+    def execute(self, usgsClient: Client, coords: World_Coordinates, outputDir : os.PathLike):
         requests = self.getDownloadRequests(usgsClient, coords)
 
         if len(requests.dataInfos) >= 50000:
@@ -229,7 +220,7 @@ class DataSource:
 
         print(f"Num of requests to process: {len(requests.dataInfos)}")
 
-        self.processDownloads(usgsClient, requests)
+        self.processDownloads(usgsClient, requests, outputDir)
 
 class Scraper:
     def __init__(self): 
@@ -238,7 +229,7 @@ class Scraper:
     def add_parser(self, parser : DataSource): 
         self.parsers.append(parser)
 
-    def run(self, bounding_box : World_Coordinates):
+    def run(self, bounding_box : World_Coordinates, outputDir : os.PathLike):
         with Client() as usgsClient: 
             for parser in self.parsers: 
-                parser.execute(usgsClient, bounding_box)
+                parser.execute(usgsClient, bounding_box, outputDir)

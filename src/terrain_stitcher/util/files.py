@@ -17,14 +17,17 @@ def find_files_with_extension(dir, extension):
         
     return files
 
-def find_file(directory, file_name):
+def default_compare_fun(element : os.PathLike, file_name_key : str) -> bool: 
+    return element == file_name_key
+
+def find_file(directory, file_name, compare_fun = default_compare_fun):
     for ele in os.listdir(directory):
         full_ele = os.path.join(directory, ele)
 
-        if file_name == ele:
-            return os.path.join(directory, file_name)
+        if compare_fun(ele, file_name):
+            return full_ele
         elif os.path.isdir(full_ele):
-            deep_search = find_file(full_ele, file_name)
+            deep_search = find_file(full_ele, file_name, compare_fun)
             if deep_search is not None:
                 return deep_search
     return None

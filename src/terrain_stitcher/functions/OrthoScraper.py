@@ -3,7 +3,7 @@ import os
 from terrain_stitcher.dataSources import HighResolutionOrthoImagery, Scraper
 from terrain_stitcher.common import ParseArea
 
-def main(shapeFile):
+def main(shapeFile, outputDir):
     sPath = os.path.join(os.getcwd(), shapeFile)
     if not os.path.isfile(sPath): 
         raise Exception("Shape file was not provided or does not exist")
@@ -14,4 +14,4 @@ def main(shapeFile):
     scraper.add_parser(imageDataset)
 
     region = area.getTotalRegion()
-    scraper.run(region)
+    scraper.run(region, outputDir)
