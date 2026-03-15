@@ -62,17 +62,10 @@ class DataSource:
     def __init__(self):
         pass
 
-    @abstractmethod
-    def getDownloadRequests(
-        self, usgsClient: Client, coords: World_Coordinates
-    ) -> DataDownloadRequest:
-        pass
-
     @staticmethod
     def DownloadFile(download : DownloadAttempt, path : str):
         SEMAPHORES.acquire()
         try:
-            print(f"Downloading: {download.url}")
             response = requests.get(download.url)
             print(f"Response received: {download.url}")
 
@@ -80,6 +73,7 @@ class DataSource:
             filename = re.findall("filename=(.+)", disposition)[0].strip("\"")
 
             fPath = os.path.join(path, filename)
+            print(f"Downloading: {download.url}")
             with open(fPath, 'wb') as file: 
                 file.write(response.content)
             print(f"Download Done: {filename}")
@@ -130,16 +124,31 @@ class DataSource:
             else:
                 allThreadsDone = True
 
+    @abstractmethod
+    def getDownloadRequests(
+        self, usgsClient: Client, coords: World_Coordinates
+    ) -> DataDownloadRequest:
+        pass
+
+    @abstractmethod
+    def onDone(self) -> None:
+        pass
+
+    @staticmethod
+    def GetDownloadDir():
+        path = os.path.join(os.getcwd(), "tmpDownloadsHighResOrtho")
+        if not os.path.isdir(path):
+            os.mkdir(path)
+
+        return path
+    
     def requestAndProcessAllDownloads(self, usgsClient : Client, downloads, requests : DataDownloadRequest) -> int: 
         requestEntityIdToDownloadRequest = {}
 
         for dataInfo in requests.dataInfos: 
            requestEntityIdToDownloadRequest[dataInfo.entityId] = dataInfo
 
-        path = os.path.join(os.getcwd(), "tmpDownloads")
-        if not os.path.isdir(path):
-            os.mkdir(path)
-
+        path = DataSource.GetDownloadDir()
         numRequestedDownload = len(downloads)
         timeLabel = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")  # Customized label using date timeLabel = 
         downloadRetrievePayload = {"downloads": downloads, "label": timeLabel}

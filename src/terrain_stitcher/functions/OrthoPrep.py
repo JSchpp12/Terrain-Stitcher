@@ -6,7 +6,7 @@ import shutil
 from zipfile import ZipFile
 from PIL import Image as pImage
 
-from terrain_stitcher.dataSources import ImageDataWriter
+from terrain_stitcher.dataSources import ImageDataWriter, HighResolutionOrthoImagery
 from terrain_stitcher.util import find_file
 
 NUM_WORKERS = 12
@@ -57,12 +57,12 @@ def gatherTerrainInfoFromFiles(inputDir):
     imageFileNameToData = {}
     for file in os.listdir(inputDir): 
         if file.lower().endswith((".json", ".txt")):
-            name = str(file).removesuffix(".txt").split('-')[1].lower()
             fPath = os.path.join(inputDir, file)
             with open(fPath) as f: 
                 jData = json.load(f)
                 imageInfo = ImageDataWriter.fromDict(jData)
 
+                name = imageInfo.imageFileName.replace(".zip", "")
                 imageFileNameToData[name] = imageInfo
 
     return imageFileNameToData
@@ -76,13 +76,18 @@ def gatherCompressedFiles(inputDir) -> list:
 
     return cFiles
 
-def copyOrthoImage(copyData : CopyData) -> str:
-    shortened_chunk_name = copyData.chunkName.split('_')[-1]
+def compareExtension(element : os.PathLike, key : str) -> bool: 
+    root, extension = os.path.splitext(element)
+    return extension is not None and extension == key
 
+def copyOrthoImage(copyData : CopyData) -> str:
     #work through directory to find file
-    src_ortho_path = find_file(copyData.extractedFileRootDir, f"{shortened_chunk_name}.tif")
+    src_ortho_path = find_file(copyData.extractedFileRootDir, ".tif", compareExtension)
     dst_ortho_path = os.path.join(copyData.outputDir, f"{copyData.chunkName}.png")
 
+    if src_ortho_path is None:
+        raise Exception("Unable to find target source file")
+    
     im = pImage.open(src_ortho_path)
 
     if copyData.scaleFactor != 1.0:
@@ -104,21 +109,20 @@ def copyAllOrthoImages(extractedImageRootDirPaths, outputDir, nameToImageWriteDa
     copyDatas = []
     for path in extractedImageRootDirPaths:
         file = os.path.basename(path)
-        chunkName = file.split('.')[0]
-        copyDatas.append(CopyData(path, outputDir, chunkName, scaleFactor, nameToImageWriteData[chunkName]))
+
+        copyDatas.append(CopyData(path, outputDir, file, scaleFactor, nameToImageWriteData[file]))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
         results = list(executor.map(copyOrthoImage, copyDatas))
 
     return results
 
-def createInfoFile(infoFilePath, chunkInfos, imageFileNameToImageInfo): 
+def createInfoFile(infoFilePath, chunkInfos, imageFileNameToImageInfo, elevationFile : os.PathLike): 
     data = {}
 
     data['images'] = []
-    data['full_terrain_file'] = "USGS_13_n40w083_20230911.tif"
+    data['full_terrain_file'] = os.path.basename(elevationFile)
     
-
     for info in chunkInfos: 
         infoName = str(os.path.basename(info)).removesuffix(".png")
         imageInfo = imageFileNameToImageInfo[infoName]
@@ -132,7 +136,7 @@ def createInfoFile(infoFilePath, chunkInfos, imageFileNameToImageInfo):
     with open(infoFilePath, 'w') as file: 
         json.dump(data, file)
 
-def main(inputDir, outputDir, scaleFactor):
+def main(inputDir, outputDir, scaleFactor, elevationFile):
     if not os.path.isdir(inputDir): 
         raise Exception("Input directory does not exist")
 
@@ -159,8 +163,11 @@ def main(inputDir, outputDir, scaleFactor):
     print("Finalizing dataset info...")
     #prepare data for starlight application
     infoFile = os.path.join(outputDir, "height_info.json")
-    createInfoFile(infoFile, copyFiles, imageFileNameToImageInfo)
+    createInfoFile(infoFile, copyFiles, imageFileNameToImageInfo, elevationFile)
     print("Done")
+
+    rElevationFile = os.path.join(outputDir, elevationFile)
+    shutil.copy2(elevationFile, rElevationFile)
 
     print(f"Deleting tmp dir: {tmpDir}")
     shutil.rmtree(tmpDir)
