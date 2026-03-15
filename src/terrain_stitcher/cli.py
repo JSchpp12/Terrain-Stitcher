@@ -1,4 +1,6 @@
 import argparse
+import shutil
+import os
 
 from terrain_stitcher.functions import main_ortho, main_shape, main_prep_ortho, main_prep_elevation
 
@@ -19,7 +21,13 @@ def addPrepOrthoImages(subparser):
 
     parserGenerate.add_argument("-o", "--output", help="Output directory")
     parserGenerate.add_argument('-i', '--input', help="Input directory")
-    parserGenerate.add_argument("-s", "--scaleFactor", help="Scale amount")
+    parserGenerate.add_argument("-f", "--scaleFactor", default=1.0, help="Scale amount")
+    parserGenerate.add_argument("-e", "--elevationFile", help="Path to full elevation file location")
+    parserGenerate.add_argument("-s", "--shapeFile")
+
+def moveShapeFile(src, outputDir): 
+    fPath = os.path.join(outputDir, os.path.basename(src))
+    shutil.copy2(src, fPath)
 
 def main(): 
     parser = argparse.ArgumentParser(prog="TerrainStitcher", description="Entrypoint for terrain stitcher tools")
@@ -37,7 +45,8 @@ def main():
     elif args.command == "gather-ortho": 
         main_ortho(args.shape)
     elif args.command == "prep-ortho": 
-        main_prep_elevation(args.input, args.output)
-        main_prep_ortho(args.input, args.output, float(args.scaleFactor))
+        main_prep_elevation(args.input, args.output, args.elevationFile)
+        main_prep_ortho(args.input, args.output, float(args.scaleFactor), args.elevationFile)
+        moveShapeFile(args.elevationFile, args.output)
     else:
         print("Unknown command type")

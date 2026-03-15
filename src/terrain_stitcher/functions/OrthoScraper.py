@@ -12,4 +12,6 @@ def main(shapeFile):
     imageDataset = HighResolutionOrthoImagery("high_res_ortho")
     scraper = Scraper()
     scraper.add_parser(imageDataset)
-    scraper.run(area.getTotalRegion())
+
+    region = area.getTotalRegion()
+    scraper.run(region)

@@ -114,7 +114,7 @@ def toPolygon(terrainChunk: Terrain_Data):
     )
 
 class ImageDataWriter(DataInfoWriter):
-    def __init__(self, bounds : Bounds, imageFileName = None):
+    def __init__(self, bounds : Bounds, imageFileName : str = None):
         self.bounds = bounds 
         self.imageFileName = imageFileName
 
@@ -299,7 +299,7 @@ class HighResolutionOrthoImagery(DataSource):
     ) -> DataDownloadRequest:
         aerial_dataset = get_aerial_photography_datasets(usgsClient, coords)
         
-        acquisition_filter = {"start": "2004-01-01", "end": "2005-01-01"}
+        acquisition_filter = {"start": "2004-01-01", "end": "2004-05-05"}
         scenes = usgsClient.find_scenes(aerial_dataset, coords, acquisition_filter)
 
         # use same logic as before
