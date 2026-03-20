@@ -1,3 +1,3 @@
-from .cli import main
+from terrain_stitcher.cli import main
 
 main()
