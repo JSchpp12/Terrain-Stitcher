@@ -10,6 +10,7 @@ def addCreateBoundsGeneratorArgs(subparser):
     parserGenerate.add_argument("-lat", "--lat", help="center latitude degrees")
     parserGenerate.add_argument("-lon", "--lon", help="center longitude degrees")
     parserGenerate.add_argument("-t", "--type", help="type of generation approach to use. Such as POINT")
+    parserGenerate.add_argument("-r", "--range", type=str, help="Range in miles of coverage")
 
 def addDownloadOrthoArgs(subparser): 
     parserGenerate = subparser.add_parser("gather-ortho")
@@ -42,7 +43,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "create-bounds": 
-        main_shape(args.lat, args.lon, args.type)
+        main_shape(args.lat, args.lon, args.type, int(args.range))
     elif args.command == "gather-ortho": 
         main_ortho(args.shape, args.output)
     elif args.command == "prep-ortho": 

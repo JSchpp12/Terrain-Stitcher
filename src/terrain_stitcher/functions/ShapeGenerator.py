@@ -3,8 +3,8 @@ import json
 
 from terrain_stitcher.common import ParseArea, World_Coordinates, nameToTerrainBoundsType
 
-def main(lat :str, lon:str, type : str): 
-    area = ParseArea(nameToTerrainBoundsType(type), World_Coordinates(lat, lon))
+def main(lat :str, lon:str, type : str, range : int): 
+    area = ParseArea(nameToTerrainBoundsType(type), World_Coordinates(lat, lon), range)
 
     jPath = os.path.join(os.getcwd(), "Shape.json")
     areaData = area.toJSON()

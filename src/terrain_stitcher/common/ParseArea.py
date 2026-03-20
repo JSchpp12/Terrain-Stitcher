@@ -17,7 +17,7 @@ def nameToTerrainBoundsType(name : str) -> TerrainBoundsCalculateType:
     if (name == "POINT"): 
         return TerrainBoundsCalculateType.POINT
     
-def calculate_bounding_box_around_point(center : World_Coordinates, radius_miles : int = 10) -> World_Bounding_Box:
+def calculate_bounding_box_around_point(center : World_Coordinates, radius_miles : int) -> World_Bounding_Box:
     # Extract latitude and longitude
     lat = center.get_lat()
     lon = center.get_lon()
@@ -35,26 +35,30 @@ def calculate_bounding_box_around_point(center : World_Coordinates, radius_miles
     return World_Bounding_Box(World_Coordinates(min_lat, min_lon), World_Coordinates(max_lat, max_lon))
 
 class ParseArea: 
-    def __init__(self, boundsType : TerrainBoundsCalculateType, center) -> None: 
+    def __init__(self, boundsType : TerrainBoundsCalculateType, center, range : int) -> None: 
         self.boundsType = boundsType
         self.center = center
+        
+        self.range = range
 
     @classmethod
     def fromJSONFile(cls, filePath): 
         with open(filePath, 'r') as file:
             jData = json.load(file)
             bounds = nameToTerrainBoundsType(jData['boundsType'])
-            return cls(bounds, World_Coordinates.fromDict(jData['center']))
+            range = jData['range']
+            return cls(bounds, World_Coordinates.fromDict(jData['center']), range)
         
     def toJSON(self) -> dict: 
         return {
             'boundsType': terrainBoundsTypeToString(self.boundsType),
-            'center': self.center.toJSON()
+            'center': self.center.toJSON(),
+            'range': self.range
         }
     
     def getTotalRegion(self) -> World_Bounding_Box: 
         if self.boundsType is TerrainBoundsCalculateType.POINT: 
-            return calculate_bounding_box_around_point(self.center, 10)
+            return calculate_bounding_box_around_point(self.center, self.range)
         else:
             raise Exception("Unhandled boundsType declaration")
     
