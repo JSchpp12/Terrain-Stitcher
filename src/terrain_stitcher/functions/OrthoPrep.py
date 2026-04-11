@@ -1,5 +1,4 @@
 import os
-import logging
 import json
 import concurrent.futures
 import shutil
@@ -15,7 +14,7 @@ from terrain_stitcher.util import find_file
 from terrain_stitcher.common import World_Bounding_Box, ParseArea
 
 pImage.MAX_IMAGE_PIXELS = 933129999
-NUM_WORKERS = 12
+NUM_WORKERS = 8
 
 
 class ExtractData:
@@ -27,13 +26,13 @@ class ExtractData:
 class CopyData:
     def __init__(
         self,
-        extractedFileRootDir,
+        compressedZipArchive,
         outputDir,
         chunkName,
         scaleFactor,
         compressedDataInfo,
     ) -> None:
-        self.extractedFileRootDir = extractedFileRootDir
+        self.compressedZipArchive = compressedZipArchive
         self.outputDir = outputDir
         self.chunkName = chunkName
         self.scaleFactor = scaleFactor
@@ -129,37 +128,35 @@ def compareExtension(element: os.PathLike, key: str) -> bool:
 
 def copyOrthoImage(copyData: CopyData) -> str:
     # work through directory to find file
-    src_ortho_path = find_file(copyData.extractedFileRootDir, ".tif", compareExtension)
     dst_ortho_path = os.path.join(copyData.outputDir, f"{copyData.chunkName}.png")
 
-    if src_ortho_path is None:
-        raise Exception("Unable to find target source file")
+    with ZipFile(copyData.compressedZipArchive) as zf:
+        tif_name = next(name for name in zf.namelist() if name.lower().endswith(".tif"))
 
-    im = None
-    try:
-        with rasterio.Env(GTIFF_SRS_SOURCE="EPSG"):
-            with rasterio.open(src_ortho_path) as src:
-                # Read all bands and transpose from (bands, H, W) to (H, W, bands)
-                img_array = np.transpose(src.read(), (1, 2, 0))
+        with zf.open(tif_name) as tif_file:
+            tif_bytes = tif_file.read()
 
-        # Normalize to uint8 if needed (e.g. 16-bit imagery)
-        if img_array.dtype != np.uint8:
-            img_array = img_array.astype(np.float32)
-            img_min, img_max = img_array.min(), img_array.max()
-            if img_max > img_min:
-                img_array = (img_array - img_min) / (img_max - img_min) * 255
-            img_array = img_array.astype(np.uint8)
+        with rasterio.MemoryFile(tif_bytes) as memfile:
+            with memfile.open() as src:
+                with rasterio.Env(GTIFF_SRS_SOURCE="EPSG"):
+                    # Read all bands and transpose from (bands, H, W) to (H, W, bands)
+                    img_array = np.transpose(src.read(), (1, 2, 0))
 
-        # Squeeze single-band arrays so PIL picks the right mode
-        if img_array.shape[2] == 1:
-            img_array = img_array[:, :, 0]
+                    # Normalize to uint8 if needed (e.g. 16-bit imagery)
+                    if img_array.dtype != np.uint8:
+                        img_array = img_array.astype(np.float32)
+                        img_min, img_max = img_array.min(), img_array.max()
+                        if img_max > img_min:
+                            img_array = (
+                                (img_array - img_min) / (img_max - img_min) * 255
+                            )
+                        img_array = img_array.astype(np.uint8)
 
-        im = pImage.fromarray(img_array)
-    except Exception as e:
-        logging.exception(
-            f"Failed to open provided file: {src_ortho_path}. With the following exception: {e}"
-        )
-        return
+                    # Squeeze single-band arrays so PIL picks the right mode
+                    if img_array.shape[2] == 1:
+                        img_array = img_array[:, :, 0]
+
+                    im = pImage.fromarray(img_array)
 
     if copyData.scaleFactor != 1.0:
         new_width = im.width * copyData.scaleFactor
@@ -177,15 +174,20 @@ def copyOrthoImage(copyData: CopyData) -> str:
     return dst_ortho_path
 
 
-def copyAllOrthoImages(
-    extractedImageRootDirPaths, outputDir, nameToImageWriteData, scaleFactor
-):
+def copyAllOrthoImages(inputDir, outputDir, nameToImageWriteData, scaleFactor):
     copyDatas = []
-    for path in extractedImageRootDirPaths:
-        file = os.path.basename(path)
+    for imageName in nameToImageWriteData:
+        data = nameToImageWriteData[imageName]
+        zipFile = os.path.join(inputDir, data.imageFileName)
 
         copyDatas.append(
-            CopyData(path, outputDir, file, scaleFactor, nameToImageWriteData[file])
+            CopyData(
+                zipFile,
+                outputDir,
+                imageName,
+                scaleFactor,
+                nameToImageWriteData[imageName],
+            )
         )
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
@@ -235,13 +237,13 @@ def main(inputDir, outputDir, scaleFactor, shapeFile: os.PathLike):
     # extract ortho files
     compressedFiles = gatherCompressedFiles(inputDir, imageFileNameToImageInfo)
     print("Extracting compressed archives...")
-    extractedPaths = extractAll(compressedFiles, tmpDir)
+    # extractedPaths = extractAll(compressedFiles, tmpDir)
     print("Done")
 
     # copy orthoimage files
     print("Processing image files...")
     copyFiles = copyAllOrthoImages(
-        extractedPaths, outputDir, imageFileNameToImageInfo, scaleFactor
+        inputDir, outputDir, imageFileNameToImageInfo, scaleFactor
     )
     print("Done")
 
