@@ -7,7 +7,7 @@ class Latitude:
         except ValueError:
             raise ValueError("Latitude must be a float.")
         if not -90.0 <= lat <= 90.0:
-            raise ValueError("Latitude must be between -90 and 90.")
+            raise ValueError(f"Latitude must be between -90 and 90. Provided value is: {value}")
         return lat
 
     def __init__(self, in_lat: str) -> None:

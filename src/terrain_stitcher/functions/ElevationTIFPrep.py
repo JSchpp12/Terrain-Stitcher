@@ -1,5 +1,9 @@
 import os
 import shutil
+import logging
+import tempfile
+import json
+
 from osgeo import gdal, osr
 
 from terrain_stitcher.util import find_files_with_extension
@@ -10,12 +14,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 MAX_WORKERS = 12
 
-class ElevationData: 
-    def __init__(self, srcFilePath, bounds : World_Bounding_Box): 
+
+class ElevationData:
+    def __init__(self, srcFilePath, bounds: World_Bounding_Box):
         self.srcFilePath = srcFilePath
         self.bounds = bounds
 
-def extractWorldBounds(filePath) -> World_Bounding_Box: 
+
+def extractWorldBounds(filePath) -> World_Bounding_Box:
     # Open the GeoTIFF
     ds = gdal.Open(filePath)
     if ds is None:
@@ -40,7 +46,7 @@ def extractWorldBounds(filePath) -> World_Bounding_Box:
 
     target_crs = osr.SpatialReference()
     target_crs.ImportFromEPSG(4326)
-    target_crs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)  # Ensures (lon, lat) order
+    target_crs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
 
     transform = osr.CoordinateTransformation(source_crs, target_crs)
 
@@ -56,35 +62,42 @@ def extractWorldBounds(filePath) -> World_Bounding_Box:
     lats = [pt[0] for pt in lon_lat_corners]
     lons = [pt[1] for pt in lon_lat_corners]
 
-    return World_Bounding_Box(World_Coordinates(min(lats), min(lons)), World_Coordinates(max(lats), max(lons)))
+    return World_Bounding_Box(
+        World_Coordinates(min(lats), min(lons)), World_Coordinates(max(lats), max(lons))
+    )
 
-def buildElevationDataFromFile(filePath : os.PathLike) -> ElevationData: 
+
+def buildElevationDataFromFile(filePath: os.PathLike) -> ElevationData:
     return ElevationData(filePath, extractWorldBounds(filePath))
 
-def getTotalElevationFile(input) -> str: 
+
+def getTotalElevationFile(input) -> str:
     if os.path.isfile(input):
         return input
 
-def copyTotalElevationFile(path, outputDir) -> None: 
-    if not os.path.isfile(path): 
+
+def copyTotalElevationFile(path, outputDir) -> None:
+    if not os.path.isfile(path):
         raise Exception("Elevation file does not exist")
-    
+
     name = os.path.basename(path)
     fPath = os.path.join(outputDir, name)
-    
+
     shutil.copy(path, fPath)
 
-def gatherAllElevationFiles(elevationDataDir : os.PathLike) -> list:
+
+def gatherAllElevationFiles(elevationDataDir: os.PathLike) -> list:
     elevationFiles = []
 
     for ele in os.listdir(elevationDataDir):
         root, ext = os.path.splitext(ele)
-        if ext == ".tif": 
+        if ext == ".tif":
             elevationFiles.append(os.path.join(elevationDataDir, ele))
 
     return elevationFiles
 
-def processAllEleationFiles(elevationDataDir : os.PathLike): 
+
+def processAllEleationFiles(elevationDataDir: os.PathLike):
     allElevationFiles = gatherAllElevationFiles(elevationDataDir)
 
     results = None
@@ -93,10 +106,11 @@ def processAllEleationFiles(elevationDataDir : os.PathLike):
 
     return results
 
+
 def findContinuousRegions(boxes: list[ElevationData]) -> list[list[World_Bounding_Box]]:
     """
     Groups World_Bounding_Box objects into continuous (overlapping or touching) regions.
-    
+
     Returns a list of groups, where each group is a list of boxes that form
     one continuous region.
     """
@@ -150,10 +164,9 @@ def findContinuousRegions(boxes: list[ElevationData]) -> list[list[World_Boundin
 
     return list(groups.values())
 
+
 def lonIntervalsCover(
-    boxes: list[World_Bounding_Box],
-    target_min_lon: float,
-    target_max_lon: float
+    boxes: list[World_Bounding_Box], target_min_lon: float, target_max_lon: float
 ) -> bool:
     """
     Returns True if the longitude intervals of the given boxes
@@ -181,9 +194,9 @@ def lonIntervalsCover(
 
     return covered_up_to >= target_max_lon
 
+
 def isFullyCovered(
-    target: World_Bounding_Box,
-    region: list[World_Bounding_Box]
+    target: World_Bounding_Box, region: list[World_Bounding_Box]
 ) -> bool:
     """
     Checks whether a target World_Bounding_Box is entirely covered
@@ -205,7 +218,10 @@ def isFullyCovered(
     lat_breaks.add(t_max_lat)
 
     for box in region:
-        for lat in (box.bounds.get_lower_left().get_lat(), box.bounds.get_upper_right().get_lat()):
+        for lat in (
+            box.bounds.get_lower_left().get_lat(),
+            box.bounds.get_upper_right().get_lat(),
+        ):
             if t_min_lat < lat < t_max_lat:
                 lat_breaks.add(lat)
 
@@ -220,18 +236,18 @@ def isFullyCovered(
 
         # Gather all region boxes that cover this lat strip
         covering_boxes = [
-            box for box in region
+            box
+            for box in region
             if box.bounds.get_lower_left().get_lat() <= strip_mid_lat
             and box.bounds.get_upper_right().get_lat() >= strip_mid_lat
         ]
 
         # Merge their lon intervals and check full coverage
-        if not lonIntervalsCover(
-            covering_boxes, t_min_lon, t_max_lon
-        ):
+        if not lonIntervalsCover(covering_boxes, t_min_lon, t_max_lon):
             return False
 
     return True
+
 
 def mergeRegionToBoundingBox(region: list[World_Bounding_Box]) -> World_Bounding_Box:
     """
@@ -248,34 +264,184 @@ def mergeRegionToBoundingBox(region: list[World_Bounding_Box]) -> World_Bounding
         World_Coordinates(lat=str(max_lat), lon=str(max_lon)),
     )
 
-def main(inputDir, outputDir, elevationDataDir : os.PathLike, shapeFile : os.PathLike): 
-    if inputDir is None or (inputDir is not None and not os.path.isdir(inputDir)): 
+
+def findIntersectingFiles(
+    elevationData: list[ElevationData], target: World_Bounding_Box
+) -> list[ElevationData]:
+    """
+    Returns every ElevationData whose bounding box has any overlap with
+    the target region. Tiles that only touch on an edge are excluded because
+    they contain no pixels inside the target.
+    """
+    t_min_lon = target.get_lower_left().get_lon()
+    t_max_lon = target.get_upper_right().get_lon()
+    t_min_lat = target.get_lower_left().get_lat()
+    t_max_lat = target.get_upper_right().get_lat()
+
+    intersecting = []
+    for ed in elevationData:
+        e_min_lon = ed.bounds.get_lower_left().get_lon()
+        e_max_lon = ed.bounds.get_upper_right().get_lon()
+        e_min_lat = ed.bounds.get_lower_left().get_lat()
+        e_max_lat = ed.bounds.get_upper_right().get_lat()
+
+        # Strict overlap: there must be a non-zero area of intersection
+        lon_overlap = e_min_lon < t_max_lon and e_max_lon > t_min_lon
+        lat_overlap = e_min_lat < t_max_lat and e_max_lat > t_min_lat
+
+        if lon_overlap and lat_overlap:
+            intersecting.append(ed)
+
+    return intersecting
+
+
+def clipElevationFileToRegion(
+    elevationData: ElevationData,
+    target: World_Bounding_Box,
+    outputPath: str,
+    padding_deg: float = 0.1,  # ~1km at mid-latitudes; tune to your needs
+) -> str:
+    min_lon = target.get_lower_left().get_lon() - padding_deg
+    min_lat = target.get_lower_left().get_lat() - padding_deg
+    max_lon = target.get_upper_right().get_lon() + padding_deg
+    max_lat = target.get_upper_right().get_lat() + padding_deg
+
+    warp_options = gdal.WarpOptions(
+        format="GTiff",
+        outputBounds=(min_lon, min_lat, max_lon, max_lat),
+        outputBoundsSRS="EPSG:4326",
+        dstSRS="EPSG:4326",
+        # No width/height — GDAL preserves the source's native pixel spacing
+        resampleAlg=gdal.GRA_Bilinear,
+        creationOptions=["TILED=YES"],
+    )
+
+    ds = gdal.Warp(outputPath, elevationData.srcFilePath, options=warp_options)
+    if ds is None:
+        raise RuntimeError(
+            f"gdal.Warp failed while clipping {elevationData.srcFilePath}"
+        )
+    ds = None
+
+    logging.info(
+        f"Clipped {os.path.basename(elevationData.srcFilePath)} → {outputPath}"
+    )
+    return outputPath
+
+
+def mosaicClippedFiles(
+    clippedPaths: list[str],
+    outputPath: str,
+    target: World_Bounding_Box,
+    padding_deg: float = 0.1,  # must match the value used in clipElevationFileToRegion
+) -> str:
+    if not clippedPaths:
+        raise ValueError("No clipped files provided for mosaicking")
+
+    if len(clippedPaths) == 1:
+        shutil.copy2(clippedPaths[0], outputPath)
+        logging.info(f"Single tile — copied directly to {outputPath}")
+        return outputPath
+
+    vrt_path = outputPath.replace(".tif", "_mosaic.vrt")
+    vrt_ds = gdal.BuildVRT(vrt_path, clippedPaths)
+    if vrt_ds is None:
+        raise RuntimeError("gdal.BuildVRT failed")
+    vrt_ds.FlushCache()
+    vrt_ds = None
+
+    # Use the same padded bounds so Translate doesn't crop the padding back off
+    min_lon = target.get_lower_left().get_lon() - padding_deg
+    min_lat = target.get_lower_left().get_lat() - padding_deg
+    max_lon = target.get_upper_right().get_lon() + padding_deg
+    max_lat = target.get_upper_right().get_lat() + padding_deg
+
+    translate_options = gdal.TranslateOptions(
+        format="GTiff",
+        projWin=[min_lon, max_lat, max_lon, min_lat],
+        projWinSRS="EPSG:4326",
+    )
+    out_ds = gdal.Translate(outputPath, vrt_path, options=translate_options)
+    if out_ds is None:
+        raise RuntimeError(
+            f"gdal.Translate failed while writing mosaic to {outputPath}"
+        )
+    out_ds = None
+
+    if os.path.exists(vrt_path):
+        os.remove(vrt_path)
+
+    logging.info(f"Mosaicked {len(clippedPaths)} tiles → {outputPath}")
+    return outputPath
+
+
+def getBoundsFromHeightInfo(heightInfoPath: str) -> World_Bounding_Box:
+    with open(heightInfoPath) as f:
+        data = json.load(f)
+
+    all_lats, all_lons = [], []
+    for image in data["images"]:
+        for key, corner in image["bounds"].items():
+            if key == "center":
+                continue
+            all_lats.append(float(corner["lat"]))
+            all_lons.append(float(corner["lon"]))
+
+    return World_Bounding_Box(
+        World_Coordinates(min(all_lats), min(all_lons)),
+        World_Coordinates(max(all_lats), max(all_lons)),
+    )
+
+
+def main(inputDir, outputDir, elevationDataDir: os.PathLike, shapeFile: os.PathLike):
+    if inputDir is None or (inputDir is not None and not os.path.isdir(inputDir)):
         raise Exception("Input dir is not defined")
-    
-    shapeFilePath = os.path.join(os.getcwd(), shapeFile)
-    if shapeFilePath is None or shapeFilePath is not None and not os.path.exists(shapeFilePath): 
-        raise Exception(f"Shape file is invalid: {shapeFilePath}")
-    
-    if not os.path.isdir(outputDir): 
+
+    if not os.path.isdir(outputDir):
         os.mkdir(outputDir)
 
+    targetArea = getBoundsFromHeightInfo(os.path.join(outputDir, "height_info.json"))
+
+    # Load bounding-box metadata for every available GeoTIFF
     elevationData = processAllEleationFiles(elevationDataDir)
-    coveredAreas = findContinuousRegions(elevationData)
-    targetArea = ParseArea.fromJSONFile(shapeFilePath).getTotalRegion()
-    foundGeoData = None
-    for area in coveredAreas: 
-        if (isFullyCovered(targetArea, area)):
-            foundGeoData = area
 
-    if foundGeoData is None:
-        raise Exception("Failed to find region which encompasses the target shape area")
-    
-    #move the resulting file to the outputDir
-    if not os.path.isdir(outputDir): 
-        os.mkdir(outputDir)
+    # Find which tiles actually overlap the target region
+    intersectingData = findIntersectingFiles(elevationData, targetArea)
+    if not intersectingData:
+        logging.warning(
+            "No GeoTIFF files intersect the requested area — nothing to do."
+        )
+        return
 
-    src = foundGeoData[0].srcFilePath
-    dst = os.path.join(outputDir, os.path.basename(src))
+    # Warn if the union of intersecting tiles does not fully cover the target
+    coveredAreas = findContinuousRegions(intersectingData)
+    fullyCovered = any(isFullyCovered(targetArea, region) for region in coveredAreas)
+    if not fullyCovered:
+        logging.warning(
+            "The available GeoTIFF files do not fully cover the requested area. "
+            "The output may contain NoData pixels near the edges."
+        )
 
-    shutil.copy2(src, dst)
-    
+    # Clip each intersecting tile to the target bounding box in a temp directory
+    with tempfile.TemporaryDirectory() as tmpDir:
+        clippedPaths = []
+        for ed in intersectingData:
+            baseName = os.path.splitext(os.path.basename(ed.srcFilePath))[0]
+            clippedPath = os.path.join(tmpDir, f"{baseName}_clipped.tif")
+            try:
+                clipElevationFileToRegion(ed, targetArea, clippedPath)
+                clippedPaths.append(clippedPath)
+            except RuntimeError as e:
+                logging.error(f"Skipping {ed.srcFilePath}: {e}")
+
+        if not clippedPaths:
+            logging.error("All clip operations failed — no output produced.")
+            return
+
+       
+
+        # Merge all clipped tiles into a single output GeoTIFF
+        outputFilePath = os.path.join(outputDir, "elevation_merged.tif")
+        mosaicClippedFiles(clippedPaths, outputFilePath, targetArea)
+
+    logging.info(f"Done. Output written to: {outputFilePath}")

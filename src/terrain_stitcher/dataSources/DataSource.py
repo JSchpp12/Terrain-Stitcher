@@ -16,46 +16,59 @@ SEMAPHORES = threading.Semaphore(value=MAX_THREADS)
 THREADS = []
 FAILED_DOWNLOADS = []
 
-class DataInfoWriter: 
+
+class DataInfoWriter:
     def __init__(self) -> None:
         pass
-    
+
     @abstractmethod
-    def writeFileContents(self, downloadDirPath, downloadedFileName : str, dataFilePath : str): 
+    def writeFileContents(
+        self, downloadDirPath, downloadedFileName: str, dataFilePath: str
+    ):
         pass
 
     @abstractmethod
-    def hasDataAlreadyBeenDownloaded(self, downloadDirPath : str, dataFilePath : str) -> bool: 
+    def hasDataAlreadyBeenDownloaded(
+        self, downloadDirPath: str, dataFilePath: str
+    ) -> bool:
         pass
 
-class DataInfo: 
-    def __init__(self, entityId, datasetName, infoWriter : DataInfoWriter): 
+
+class DataInfo:
+    def __init__(self, entityId, datasetName, infoWriter: DataInfoWriter):
         self.entityId = entityId
         self.datasetName = datasetName
         self.infoWriter = infoWriter
 
-    def writeDataInfoFileContents(self, downloadDirPath, downloadedFileName): 
-        self.infoWriter.writeFileContents(downloadDirPath, downloadedFileName, self.getDataFilePath())
+    def writeDataInfoFileContents(self, downloadDirPath, downloadedFileName):
+        self.infoWriter.writeFileContents(
+            downloadDirPath, downloadedFileName, self.getDataFilePath()
+        )
 
     def getDataFilePath(self):
         return f"{self.datasetName}-{self.entityId}.txt"
 
-    def hasDataInfoAlreadyBeenDownloaded(self, downloadDirPath) -> bool: 
-        return self.infoWriter.hasDataAlreadyBeenDownloaded(downloadDirPath, self.getDataFilePath())
-        
+    def hasDataInfoAlreadyBeenDownloaded(self, downloadDirPath) -> bool:
+        return self.infoWriter.hasDataAlreadyBeenDownloaded(
+            downloadDirPath, self.getDataFilePath()
+        )
+
+
 class DataDownloadRequest:
     def __init__(self, datasetName):
         self.datasetName = datasetName
         self.dataInfos = []
 
-    def addDataInfo(self, dataInfo : DataInfo):
+    def addDataInfo(self, dataInfo: DataInfo):
         self.dataInfos.append(dataInfo)
-    
+
+
 class DownloadAttempt:
-    def __init__(self, url, dataInfo : DataInfo) -> None:
+    def __init__(self, url, dataInfo: DataInfo) -> None:
         self.dataInfo = dataInfo
         self.url = url
         self.numAttempts = 0
+
 
 # make this class virtual
 class DataSource:
@@ -63,18 +76,18 @@ class DataSource:
         pass
 
     @staticmethod
-    def DownloadFile(download : DownloadAttempt, path : str):
+    def DownloadFile(download: DownloadAttempt, path: str):
         SEMAPHORES.acquire()
         try:
             response = requests.get(download.url)
             print(f"Response received: {download.url}")
 
-            disposition = response.headers['content-disposition']
-            filename = re.findall("filename=(.+)", disposition)[0].strip("\"")
+            disposition = response.headers["content-disposition"]
+            filename = re.findall("filename=(.+)", disposition)[0].strip('"')
 
             fPath = os.path.join(path, filename)
             print(f"Downloading: {download.url}")
-            with open(fPath, 'wb') as file: 
+            with open(fPath, "wb") as file:
                 file.write(response.content)
             print(f"Download Done: {filename}")
 
@@ -83,43 +96,51 @@ class DataSource:
             print(f"Done: {download.dataInfo.getDataFilePath()}")
 
             SEMAPHORES.release()
-        except Exception as ex: 
+        except Exception as ex:
             download.numAttempts += 1
             SEMAPHORES.release()
-            
+
             print(f"Error ocurred during download: {ex}")
-            
+
             if download.numAttempts < 5:
-                print("Will retry") 
+                print("Will retry")
                 DataSource.QueueDownload(download, path)
             else:
                 print(f"Maximum attempt for object with url: {download.url}")
                 FAILED_DOWNLOADS.append(download)
 
     @staticmethod
-    def HasDownloadBeenProcessed(download : DownloadAttempt, path) -> bool: 
+    def HasDownloadBeenProcessed(download: DownloadAttempt, path) -> bool:
         return download.dataInfo.hasDataInfoAlreadyBeenDownloaded(path)
-    
+
     @staticmethod
-    def QueueDownload(download : DownloadAttempt, path): 
-        if not DataSource.HasDownloadBeenProcessed(download, path): 
-            thread = threading.Thread(target=DataSource.DownloadFile, args=(download,path, ))
+    def QueueDownload(download: DownloadAttempt, path):
+        if not DataSource.HasDownloadBeenProcessed(download, path):
+            thread = threading.Thread(
+                target=DataSource.DownloadFile,
+                args=(
+                    download,
+                    path,
+                ),
+            )
             THREADS.append(thread)
             thread.start()
         else:
             print(f"Skipping already downloaded file detected for {download.url}")
 
     @staticmethod
-    def WaitForDone(): 
+    def WaitForDone():
         allThreadsDone = False
-        while not allThreadsDone: 
+        while not allThreadsDone:
             aliveThreadCount = 0
-            for thread in THREADS: 
-                if thread.is_alive(): 
+            for thread in THREADS:
+                if thread.is_alive():
                     aliveThreadCount += 1
 
-            if aliveThreadCount != 0: 
-                print(f"Download heartbeat check. Remaining downloads: {aliveThreadCount}")
+            if aliveThreadCount != 0:
+                print(
+                    f"Download heartbeat check. Remaining downloads: {aliveThreadCount}"
+                )
                 time.sleep(15)
             else:
                 allThreadsDone = True
@@ -133,71 +154,125 @@ class DataSource:
     @abstractmethod
     def onDone(self) -> None:
         pass
-    
-    def requestAndProcessAllDownloads(self, usgsClient : Client, downloads, requests : DataDownloadRequest, outputDir) -> int: 
+
+    def requestAndProcessAllDownloads(
+        self, usgsClient: Client, downloads, requests: DataDownloadRequest, outputDir
+    ) -> int:
         requestEntityIdToDownloadRequest = {}
 
-        for dataInfo in requests.dataInfos: 
-           requestEntityIdToDownloadRequest[dataInfo.entityId] = dataInfo
+        for dataInfo in requests.dataInfos:
+            requestEntityIdToDownloadRequest[dataInfo.entityId] = dataInfo
 
         numRequestedDownload = len(downloads)
-        timeLabel = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")  # Customized label using date timeLabel = 
+        timeLabel = datetime.datetime.now().strftime(
+            "%Y%m%d_%H%M%S"
+        )  # Customized label using date timeLabel =
         downloadRetrievePayload = {"downloads": downloads, "label": timeLabel}
 
         downloadIds = []
         print("Gathering download status")
-        requestResults = usgsClient.submitRequest("download-request", downloadRetrievePayload)
+        requestResults = usgsClient.submitRequest(
+            "download-request", downloadRetrievePayload
+        )
         print("Done")
 
         # some downloads are not available right away...wait for them
-        if (requestResults["preparingDownloads"] != None and len(requestResults["preparingDownloads"]) > 0):
+        if (
+            requestResults["preparingDownloads"] != None
+            and len(requestResults["preparingDownloads"]) > 0
+        ):
             moreURLRequestPayload = {"label": timeLabel}
             print("Gathering downloads")
-            moreDownloadUrls = usgsClient.submitRequest("download-retrieve", moreURLRequestPayload)
-            
+            moreDownloadUrls = usgsClient.submitRequest(
+                "download-retrieve", moreURLRequestPayload
+            )
+
             downloadIds = []
             for download in moreDownloadUrls["available"]:
-                downloadId = str(download['downloadId'])
-                if downloadId in requestResults['newRecords'] or downloadId in requestResults['duplicateProducts']: 
-                    downloadIds.append(downloadId)
-                    mappedDataRequestRecord = requestEntityIdToDownloadRequest[download['entityId']]
-
-                    DataSource.QueueDownload(DownloadAttempt(download['url'], mappedDataRequestRecord), outputDir)
-
-            for download in moreDownloadUrls["requested"]: 
                 downloadId = str(download["downloadId"])
-                if downloadId in requestResults['newRecords'] or downloadId in requestResults['duplicateProducts']: 
-                    mappedDataRequestRecord = requestEntityIdToDownloadRequest[download['entityId']]
+                if (
+                    downloadId in requestResults["newRecords"]
+                    or downloadId in requestResults["duplicateProducts"]
+                ):
+                    downloadIds.append(downloadId)
+                    mappedDataRequestRecord = requestEntityIdToDownloadRequest[
+                        download["entityId"]
+                    ]
 
-                    DataSource.QueueDownload(DownloadAttempt(download['url'], mappedDataRequestRecord), outputDir)
+                    DataSource.QueueDownload(
+                        DownloadAttempt(download["url"], mappedDataRequestRecord),
+                        outputDir,
+                    )
 
-            while len(downloadIds) < (numRequestedDownload - (len(requestResults['failed']) + len(FAILED_DOWNLOADS))): 
-                preparingDownloads = numRequestedDownload - len(downloadIds) - len(requestResults['failed'])
-                print("\n", preparingDownloads, "downloads are not available. Waiting for 30 seconds.\n")
+            for download in moreDownloadUrls["requested"]:
+                downloadId = str(download["downloadId"])
+                if (
+                    downloadId in requestResults["newRecords"]
+                    or downloadId in requestResults["duplicateProducts"]
+                ):
+                    mappedDataRequestRecord = requestEntityIdToDownloadRequest[
+                        download["entityId"]
+                    ]
+
+                    DataSource.QueueDownload(
+                        DownloadAttempt(download["url"], mappedDataRequestRecord),
+                        outputDir,
+                    )
+
+            while len(downloadIds) < (
+                numRequestedDownload
+                - (len(requestResults["failed"]) + len(FAILED_DOWNLOADS))
+            ):
+                preparingDownloads = (
+                    numRequestedDownload
+                    - len(downloadIds)
+                    - len(requestResults["failed"])
+                )
+                print(
+                    "\n",
+                    preparingDownloads,
+                    "downloads are not available. Waiting for 30 seconds.\n",
+                )
                 time.sleep(30)
                 print("Trying again")
-                moreDownloadUrls = usgsClient.submitRequest("download-retrieve", moreURLRequestPayload)
-                for download in moreDownloadUrls['available']: 
-                    downloadId = str(download['downloadId'])
-                    if downloadId not in downloadIds and (downloadId in requestResults['newRecords'] or downloadId in requestResults['duplicateProducts']):
+                moreDownloadUrls = usgsClient.submitRequest(
+                    "download-retrieve", moreURLRequestPayload
+                )
+                for download in moreDownloadUrls["available"]:
+                    downloadId = str(download["downloadId"])
+                    if downloadId not in downloadIds and (
+                        downloadId in requestResults["newRecords"]
+                        or downloadId in requestResults["duplicateProducts"]
+                    ):
                         downloadIds.append(downloadId)
-                        mappedDataRequestRecord = requestEntityIdToDownloadRequest[download['entityId']]
+                        mappedDataRequestRecord = requestEntityIdToDownloadRequest[
+                            download["entityId"]
+                        ]
 
-                        DataSource.QueueDownload(DownloadAttempt(download['url'], mappedDataRequestRecord), outputDir)
+                        DataSource.QueueDownload(
+                            DownloadAttempt(download["url"], mappedDataRequestRecord),
+                            outputDir,
+                        )
 
         else:
-            #just download all of them
-            for download in requestResults['availableDownloads']: 
-                mappedDataRequestRecord = requestEntityIdToDownloadRequest[download['entityId']]
-                DataSource.QueueDownload(DownloadAttempt(download['url'], mappedDataRequestRecord), outputDir)
+            # just download all of them
+            for download in requestResults["availableDownloads"]:
+                mappedDataRequestRecord = requestEntityIdToDownloadRequest[
+                    download["entityId"]
+                ]
+                DataSource.QueueDownload(
+                    DownloadAttempt(download["url"], mappedDataRequestRecord), outputDir
+                )
 
         print("Downloading files... Please do not close the program\n")
         DataSource.WaitForDone()
         print("Download complete")
-     
-    def processDownloads(self, usgsClient: Client, request: DataDownloadRequest, outputDir : os.PathLike):
+
+    def processDownloads(
+        self, usgsClient: Client, request: DataDownloadRequest, outputDir: os.PathLike
+    ):
         entityIDs = []
-        for r in request.dataInfos: 
+        for r in request.dataInfos:
             entityIDs.append(r.entityId)
 
         payload = {"datasetName": request.datasetName, "entityIds": entityIDs}
@@ -207,12 +282,18 @@ class DataSource:
         downloads = []
         for product in downloadOptions:
             if product["available"] == True:
-                downloads.append({"entityId": product["entityId"], "productId": product["id"]})
+                downloads.append(
+                    {"entityId": product["entityId"], "productId": product["id"]}
+                )
 
         if downloads:
-            self.requestAndProcessAllDownloads(usgsClient, downloads, request, outputDir)
+            self.requestAndProcessAllDownloads(
+                usgsClient, downloads, request, outputDir
+            )
 
-    def execute(self, usgsClient: Client, coords: World_Coordinates, outputDir : os.PathLike):
+    def execute(
+        self, usgsClient: Client, coords: World_Coordinates, outputDir: os.PathLike
+    ):
         requests = self.getDownloadRequests(usgsClient, coords)
 
         if len(requests.dataInfos) >= 50000:
@@ -222,14 +303,15 @@ class DataSource:
 
         self.processDownloads(usgsClient, requests, outputDir)
 
+
 class Scraper:
-    def __init__(self): 
+    def __init__(self):
         self.parsers = []
 
-    def add_parser(self, parser : DataSource): 
+    def add_parser(self, parser: DataSource):
         self.parsers.append(parser)
 
-    def run(self, bounding_box : World_Coordinates, outputDir : os.PathLike):
-        with Client() as usgsClient: 
-            for parser in self.parsers: 
+    def run(self, bounding_box: World_Coordinates, outputDir: os.PathLike):
+        with Client() as usgsClient:
+            for parser in self.parsers:
                 parser.execute(usgsClient, bounding_box, outputDir)

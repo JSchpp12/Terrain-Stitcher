@@ -6,25 +6,20 @@ from shapely.geometry import Polygon
 from shapely.ops import transform
 from collections import defaultdict
 from rtree import index
+from datetime import datetime
 
 from .DataSource import DataSource, DataDownloadRequest, DataInfoWriter, DataInfo
 from terrain_stitcher.usgs import Client
-from terrain_stitcher.common import World_Coordinates
+from terrain_stitcher.common import World_Bounding_Box, World_Coordinates
 
 # Projector for WGS84 → Web Mercator (meters)
 project = pyproj.Transformer.from_crs(
     "EPSG:4326", "EPSG:3857", always_xy=True
 ).transform
 
+
 def get_aerial_photography_datasets(usgs, bounding_box: World_Coordinates):
     aDatasets = []
-
-    prime = []
-    test_datasets = usgs.find_datasets_for(bounding_box)
-    for test in test_datasets: 
-        if test['abstractText'] is not None and "NED" in test['abstractText']:
-            prime.append(test)
-
 
     datasets = usgs.find_datasets_for(bounding_box, "high_res_ortho")
     for dataset in datasets:
@@ -36,7 +31,6 @@ def get_aerial_photography_datasets(usgs, bounding_box: World_Coordinates):
             aDatasets.append(dataset)
 
     return aDatasets[0]
-
 
 class Bounds:
     def __init__(
@@ -64,25 +58,26 @@ class Bounds:
 
     def getCenter(self) -> World_Coordinates:
         return self.coords_center
-    
-    def toJSON(self): 
+
+    def toJSON(self):
         return {
-            'center': self.coords_center.toJSON(),
-            'northEast': self.coords_northEast.toJSON(), 
-            'southEast': self.coords_southEast.toJSON(),
-            'southWest': self.coords_southWest.toJSON(),
-            'northWest': self.coords_northWest.toJSON() 
+            "center": self.coords_center.toJSON(),
+            "northEast": self.coords_northEast.toJSON(),
+            "southEast": self.coords_southEast.toJSON(),
+            "southWest": self.coords_southWest.toJSON(),
+            "northWest": self.coords_northWest.toJSON(),
         }
-    
+
     @classmethod
-    def fromDict(cls, data): 
-        center = World_Coordinates.fromDict(data['center'])
-        northEast = World_Coordinates.fromDict(data['northEast'])
-        southEast = World_Coordinates.fromDict(data['southEast'])
-        southWest = World_Coordinates.fromDict(data['southWest'])
-        northWest = World_Coordinates.fromDict(data['northWest'])
+    def fromDict(cls, data):
+        center = World_Coordinates.fromDict(data["center"])
+        northEast = World_Coordinates.fromDict(data["northEast"])
+        southEast = World_Coordinates.fromDict(data["southEast"])
+        southWest = World_Coordinates.fromDict(data["southWest"])
+        northWest = World_Coordinates.fromDict(data["northWest"])
 
         return cls(northEast, southEast, southWest, northWest, center)
+
 
 def buildRTree(polygons):
     idx = index.Index()
@@ -113,57 +108,58 @@ def toPolygon(terrainChunk: Terrain_Data):
         ]
     )
 
+
 class ImageDataWriter(DataInfoWriter):
-    def __init__(self, bounds : Bounds, imageFileName : str = None):
-        self.bounds = bounds 
+    def __init__(self, bounds: Bounds, imageFileName: str = None):
+        self.bounds = bounds
         self.imageFileName = imageFileName
 
-        super().__init__() 
+        super().__init__()
 
-    def setImageFileName(self, imageFileName): 
+    def setImageFileName(self, imageFileName):
         self.imageFileName = imageFileName
 
     def toJSON(self):
-        return {
-            'bounds': self.bounds.toJSON(),
-            'imageFileName': self.imageFileName
-        }
-    
+        return {"bounds": self.bounds.toJSON(), "imageFileName": self.imageFileName}
+
     @staticmethod
     def ExtractImageFileName(dataInfoFilePath):
         parentDir = os.path.abspath(os.path.join(dataInfoFilePath, os.pardir))
 
-        with open(dataInfoFilePath, 'r') as file: 
+        with open(dataInfoFilePath, "r") as file:
             jData = json.load(file)
 
-            if 'imageFileName' in jData: 
-                return jData['imageFileName']
+            if "imageFileName" in jData:
+                return jData["imageFileName"]
         return None
-    
+
     @classmethod
-    def fromDict(cls, data): 
-        bounds = Bounds.fromDict(data['bounds'])
-        imageFileName = data['imageFileName']
+    def fromDict(cls, data):
+        bounds = Bounds.fromDict(data["bounds"])
+        imageFileName = data["imageFileName"]
         return cls(bounds, imageFileName)
 
     def writeFileContents(self, downloadDirPath, downloadedFile, dataFilePath):
         fPath = os.path.join(downloadDirPath, dataFilePath)
         self.imageFileName = downloadedFile
 
-        with open(fPath, "w") as jsonFile: 
+        with open(fPath, "w") as jsonFile:
             json.dump(self.toJSON(), jsonFile, indent=4)
 
-    def hasDataAlreadyBeenDownloaded(self, downloadDirPath : str, dataFilePath : str) -> bool: 
+    def hasDataAlreadyBeenDownloaded(
+        self, downloadDirPath: str, dataFilePath: str
+    ) -> bool:
         dataInfoFile = os.path.join(downloadDirPath, dataFilePath)
-        if os.path.isfile(dataInfoFile): 
+        if os.path.isfile(dataInfoFile):
             mediaFilePath = ImageDataWriter.ExtractImageFileName(dataInfoFile)
-            
+
             fullMediaFilePath = os.path.join(downloadDirPath, mediaFilePath)
-            if os.path.isfile(fullMediaFilePath): 
+            if os.path.isfile(fullMediaFilePath):
                 return True
-            
+
         return False
-    
+
+
 class HighResolutionOrthoImagery(DataSource):
     def __init__(self, datasetName):
         self.name = datasetName
@@ -277,6 +273,7 @@ class HighResolutionOrthoImagery(DataSource):
                 groups.append({i})
 
         return groups
+
     @staticmethod
     def SelectRepresentatives(groups, boundsList, criteria="min_index"):
         selected = []
@@ -294,23 +291,58 @@ class HighResolutionOrthoImagery(DataSource):
 
         return selected
 
+    @staticmethod
+    def PromptUserForSelectSceneGroup(uniqueDates: dict) -> int:
+        message = """There is more than one covered temporal start date covered in the requested search. Select which one to target: \n"""
+
+        keys = []
+        index = 0
+        for date in uniqueDates:
+            keys.append(date)
+            subMsg = f"{index} -> {date[0]} - {date[1]} : count({len(uniqueDates[date])})\n"
+            message += subMsg
+            index += 1
+        print(message)
+
+        values : [] = None
+        intputValues = input("Selection: ")
+
+        fKeys = []
+        for value in str(intputValues).split(','):
+            fKeys.append(keys[int(value)])
+        return fKeys
+
     def getDownloadRequests(
-        self, usgsClient: Client, coords: World_Coordinates
+        self, usgsClient: Client, coords: World_Bounding_Box
     ) -> DataDownloadRequest:
         aerial_dataset = get_aerial_photography_datasets(usgsClient, coords)
-        
-        acquisition_filter = {"start": "2004-01-01", "end": "2004-05-05"}
-        scenes = usgsClient.find_scenes(aerial_dataset, coords, acquisition_filter)
 
-        # use same logic as before
+        scenes = usgsClient.find_scenes(aerial_dataset, coords, None)
+
+        uniqueDates = {}
+        for scene in scenes["results"]:
+            sDate = datetime.fromisoformat(scene["temporalCoverage"]["startDate"])
+            eDate = datetime.fromisoformat(scene["temporalCoverage"]["endDate"])
+            dRange = (sDate, eDate)
+            if dRange not in uniqueDates:
+                uniqueDates[dRange] = [scene]
+            else:
+                uniqueDates[dRange].append(scene)
+
+        # more than one date coverage, prompt user
+        targetDates = HighResolutionOrthoImagery.PromptUserForSelectSceneGroup(
+            uniqueDates
+        )
+
         request = DataDownloadRequest(self.name)
 
         print("Processing scene bounds")
         allChunks = []
-        for scene in scenes["results"]:
-            allChunks.append(
-                Terrain_Data(scene, HighResolutionOrthoImagery.ExtractBounds(scene))
-            )
+        for targetDate in targetDates:
+            for scene in uniqueDates[targetDate]:
+                allChunks.append(
+                    Terrain_Data(scene, HighResolutionOrthoImagery.ExtractBounds(scene))
+                )
         print("Done")
         print(f"Number of total chunks: {len(allChunks)}")
 
@@ -331,7 +363,9 @@ class HighResolutionOrthoImagery(DataSource):
         print("Done")
 
         for i in range(len(selected)):
-            bounds = HighResolutionOrthoImagery.ExtractBounds(allChunks[selected[i]].record)
+            bounds = HighResolutionOrthoImagery.ExtractBounds(
+                allChunks[selected[i]].record
+            )
             imageWriter = ImageDataWriter(bounds)
             entityID = allChunks[selected[i]].record["entityId"]
             info = DataInfo(entityID, self.name, imageWriter)

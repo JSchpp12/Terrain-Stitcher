@@ -2,6 +2,8 @@ __pycache__
 result/
 terrains/
 data/
+tmp/
+downloads/
 src/tmpDownloads/
 .env
 *.egg-info
