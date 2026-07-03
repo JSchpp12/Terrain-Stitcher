@@ -4,6 +4,7 @@ terrains/
 data/
 src/tmpDownloads/
 .env
+.vscode/
 *.egg-info
 *.zip
 *.txt
