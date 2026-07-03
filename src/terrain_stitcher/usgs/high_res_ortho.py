@@ -1,20 +1,11 @@
-import pyproj
-import json
-import os
-
-from shapely.geometry import Polygon
-from shapely.ops import transform
 from collections import defaultdict
-from rtree import index
 
-from .DataSource import DataSource, DataDownloadRequest, DataInfoWriter, DataInfo
-from terrain_stitcher.usgs import Client
+from .api_client import Client
+from .data_source import DataSource, DataDownloadRequest, DataInfo
+from .geometry import buildRTree, toProjected, toPolygon, Terrain_Data
 from terrain_stitcher.common import World_Coordinates
+from terrain_stitcher.sources import Bounds, ImageDataWriter
 
-# Projector for WGS84 → Web Mercator (meters)
-project = pyproj.Transformer.from_crs(
-    "EPSG:4326", "EPSG:3857", always_xy=True
-).transform
 
 def get_aerial_photography_datasets(usgs, bounding_box: World_Coordinates):
     aDatasets = []
@@ -31,132 +22,6 @@ def get_aerial_photography_datasets(usgs, bounding_box: World_Coordinates):
     return aDatasets[0]
 
 
-class Bounds:
-    def __init__(
-        self,
-        coords_northEast: World_Coordinates,
-        coords_southEast: World_Coordinates,
-        coords_southWest: World_Coordinates,
-        coords_northWest: World_Coordinates,
-        coords_center: World_Coordinates,
-    ):
-        self.coords_northEast = coords_northEast
-        self.coords_southEast = coords_southEast
-        self.coords_southWest = coords_southWest
-        self.coords_northWest = coords_northWest
-        self.coords_center = coords_center
-
-    def isValid(self) -> bool:
-        return (
-            self.coords_northEast.isValid()
-            and self.coords_southEast.isValid()
-            and self.coords_southWest.isValid()
-            and self.coords_northWest.isValid()
-            and self.coords_center.isValid()
-        )
-
-    def getCenter(self) -> World_Coordinates:
-        return self.coords_center
-    
-    def toJSON(self): 
-        return {
-            'center': self.coords_center.toJSON(),
-            'northEast': self.coords_northEast.toJSON(), 
-            'southEast': self.coords_southEast.toJSON(),
-            'southWest': self.coords_southWest.toJSON(),
-            'northWest': self.coords_northWest.toJSON() 
-        }
-    
-    @classmethod
-    def fromDict(cls, data): 
-        center = World_Coordinates.fromDict(data['center'])
-        northEast = World_Coordinates.fromDict(data['northEast'])
-        southEast = World_Coordinates.fromDict(data['southEast'])
-        southWest = World_Coordinates.fromDict(data['southWest'])
-        northWest = World_Coordinates.fromDict(data['northWest'])
-
-        return cls(northEast, southEast, southWest, northWest, center)
-
-def buildRTree(polygons):
-    idx = index.Index()
-    for i, poly in enumerate(polygons):
-        idx.insert(i, poly.bounds)
-    return idx
-
-
-class Terrain_Data:
-    def __init__(self, record, bounds: Bounds):
-        self.record = record
-        self.bounds = bounds
-
-
-def toProjected(polygon):
-    return transform(project, polygon)
-
-
-def toPolygon(terrainChunk: Terrain_Data):
-    bounds = terrainChunk.bounds
-    return Polygon(
-        [
-            (bounds.coords_northWest.get_lon(), bounds.coords_northWest.get_lat()),
-            (bounds.coords_northEast.get_lon(), bounds.coords_northEast.get_lat()),
-            (bounds.coords_southEast.get_lon(), bounds.coords_southEast.get_lat()),
-            (bounds.coords_southWest.get_lon(), bounds.coords_southWest.get_lat()),
-            (bounds.coords_northWest.get_lon(), bounds.coords_northWest.get_lat()),
-        ]
-    )
-
-class ImageDataWriter(DataInfoWriter):
-    def __init__(self, bounds : Bounds, imageFileName : str = None):
-        self.bounds = bounds 
-        self.imageFileName = imageFileName
-
-        super().__init__() 
-
-    def setImageFileName(self, imageFileName): 
-        self.imageFileName = imageFileName
-
-    def toJSON(self):
-        return {
-            'bounds': self.bounds.toJSON(),
-            'imageFileName': self.imageFileName
-        }
-    
-    @staticmethod
-    def ExtractImageFileName(dataInfoFilePath):
-        parentDir = os.path.abspath(os.path.join(dataInfoFilePath, os.pardir))
-
-        with open(dataInfoFilePath, 'r') as file: 
-            jData = json.load(file)
-
-            if 'imageFileName' in jData: 
-                return jData['imageFileName']
-        return None
-    
-    @classmethod
-    def fromDict(cls, data): 
-        bounds = Bounds.fromDict(data['bounds'])
-        imageFileName = data['imageFileName']
-        return cls(bounds, imageFileName)
-
-    def writeFileContents(self, downloadDirPath, downloadedFile, dataFilePath):
-        fPath = os.path.join(downloadDirPath, dataFilePath)
-        self.imageFileName = downloadedFile
-
-        with open(fPath, "w") as jsonFile: 
-            json.dump(self.toJSON(), jsonFile, indent=4)
-
-    def hasDataAlreadyBeenDownloaded(self, downloadDirPath : str, dataFilePath : str) -> bool: 
-        dataInfoFile = os.path.join(downloadDirPath, dataFilePath)
-        if os.path.isfile(dataInfoFile): 
-            mediaFilePath = ImageDataWriter.ExtractImageFileName(dataInfoFile)
-            
-            fullMediaFilePath = os.path.join(downloadDirPath, mediaFilePath)
-            if os.path.isfile(fullMediaFilePath): 
-                return True
-            
-        return False
-    
 class HighResolutionOrthoImagery(DataSource):
     def __init__(self, datasetName):
         self.name = datasetName
@@ -270,6 +135,7 @@ class HighResolutionOrthoImagery(DataSource):
                 groups.append({i})
 
         return groups
+
     @staticmethod
     def SelectRepresentatives(groups, boundsList, criteria="min_index"):
         selected = []
@@ -291,7 +157,7 @@ class HighResolutionOrthoImagery(DataSource):
         self, usgsClient: Client, coords: World_Coordinates
     ) -> DataDownloadRequest:
         aerial_dataset = get_aerial_photography_datasets(usgsClient, coords)
-        
+
         acquisition_filter = {"start": "2004-01-01", "end": "2004-05-05"}
         scenes = usgsClient.find_scenes(aerial_dataset, coords, acquisition_filter)
 
@@ -324,7 +190,9 @@ class HighResolutionOrthoImagery(DataSource):
         print("Done")
 
         for i in range(len(selected)):
-            bounds = HighResolutionOrthoImagery.ExtractBounds(allChunks[selected[i]].record)
+            bounds = HighResolutionOrthoImagery.ExtractBounds(
+                allChunks[selected[i]].record
+            )
             imageWriter = ImageDataWriter(bounds)
             entityID = allChunks[selected[i]].record["entityId"]
             info = DataInfo(entityID, self.name, imageWriter)

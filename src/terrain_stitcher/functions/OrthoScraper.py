@@ -1,6 +1,6 @@
 import os 
 
-from terrain_stitcher.dataSources import HighResolutionOrthoImagery, Scraper
+from terrain_stitcher.usgs import HighResolutionOrthoImagery, Scraper
 from terrain_stitcher.common import ParseArea
 
 def main(shapeFile, outputDir):

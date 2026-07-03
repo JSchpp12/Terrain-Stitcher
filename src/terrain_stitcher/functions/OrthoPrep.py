@@ -6,7 +6,7 @@ import shutil
 from zipfile import ZipFile
 from PIL import Image as pImage
 
-from terrain_stitcher.dataSources import ImageDataWriter, HighResolutionOrthoImagery
+from terrain_stitcher.sources import ImageDataWriter
 from terrain_stitcher.util import find_file
 
 NUM_WORKERS = 12
