@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import shutil
 import os
 
@@ -16,6 +16,18 @@ def addDownloadOrthoArgs(subparser):
 
     parserGenerate.add_argument("-o", "--output", help="Directory to place gathered files")
     parserGenerate.add_argument("-s", "--shape", help="Shape file defining area for generation")
+    parserGenerate.add_argument(
+        "-src",
+        "--source",
+        choices=["usgs", "arcgis"],
+        default="usgs",
+        help="Acquisition source to use (default: usgs)",
+    )
+    parserGenerate.add_argument(
+        "-i",
+        "--input",
+        help="Source directory for local imports (required for arcgis)",
+    )
 
 def addPrepOrthoImages(subparser): 
     parserGenerate = subparser.add_parser("prep-ortho")
@@ -44,7 +56,7 @@ def main():
     if args.command == "create-bounds": 
         main_shape(args.lat, args.lon, args.type)
     elif args.command == "gather-ortho": 
-        main_ortho(args.shape, args.output)
+        main_ortho(args.shape, args.output, args.source, args.input)
     elif args.command == "prep-ortho": 
         main_prep_elevation(args.input, args.output, args.elevationDataDir, args.shapeFile)
         main_prep_ortho(args.input, args.output, float(args.scaleFactor))

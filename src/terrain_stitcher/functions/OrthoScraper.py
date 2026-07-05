@@ -1,17 +1,10 @@
-import os 
+﻿from terrain_stitcher.sources.acquisition import get_acquisition_source
 
-from terrain_stitcher.usgs import HighResolutionOrthoImagery, Scraper
-from terrain_stitcher.common import ParseArea
 
-def main(shapeFile, outputDir):
-    sPath = os.path.join(os.getcwd(), shapeFile)
-    if not os.path.isfile(sPath): 
-        raise Exception("Shape file was not provided or does not exist")
+def main(shapeFile, outputDir, source="usgs", inputDir=None):
+    """Dispatch orthoimagery acquisition to the requested source.
 
-    area = ParseArea.fromJSONFile(sPath)
-    imageDataset = HighResolutionOrthoImagery("high_res_ortho")
-    scraper = Scraper()
-    scraper.add_parser(imageDataset)
-
-    region = area.getTotalRegion()
-    scraper.run(region, outputDir)
+    Defaults to the USGS API path to preserve existing behaviour when the
+    ``--source`` CLI flag is omitted.
+    """
+    get_acquisition_source(source).acquire(shapeFile, outputDir, inputDir)

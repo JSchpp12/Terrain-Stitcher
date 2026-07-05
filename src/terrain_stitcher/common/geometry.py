@@ -1,12 +1,17 @@
+﻿from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import pyproj
 
 from shapely.geometry import Polygon
 from shapely.ops import transform
 from rtree import index
 
-from terrain_stitcher.sources import Bounds
+if TYPE_CHECKING:
+    from terrain_stitcher.sources import Bounds
 
-# Projector for WGS84 → Web Mercator (meters)
+# Projector for WGS84 -> Web Mercator (meters)
 project = pyproj.Transformer.from_crs(
     "EPSG:4326", "EPSG:3857", always_xy=True
 ).transform

@@ -7,12 +7,28 @@ name = "terrain_stitcher"
 version = "0.1.0"
 description = "Terrain Scraper"
 requires-python = ">=3.9"
+dependencies = [
+    "beautifulsoup4>=4.14.2",
+    "pillow>=11.3.0",
+    "pyproj>=3.7.1",
+    "python-dotenv>=1.2.1",
+    "requests>=2.32.5",
+    "rtree>=1.4.1",
+    "rasterio>=1.4.3",
+    "shapely>=2.0.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
 
 [project.scripts]
 terrain_stitcher = "terrain_stitcher.cli:main"
 
-[tools.hatch.metadata]
+[tool.hatch.metadata]
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/terrain_stitcher"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
