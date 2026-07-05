@@ -7,6 +7,8 @@ from .tile_files import (
     all_layers_path,
     gather_tile_files,
 )
+from .tile_info import TileInfo
+from .tile_zip import compress_tile_to_zip, tile_chunk_name
 
 __all__ = [
     "ArcGisProAcquisitionSource",
@@ -18,4 +20,7 @@ __all__ = [
     "TILE_EXTENSION",
     "all_layers_path",
     "gather_tile_files",
+    "TileInfo",
+    "compress_tile_to_zip",
+    "tile_chunk_name",
 ]

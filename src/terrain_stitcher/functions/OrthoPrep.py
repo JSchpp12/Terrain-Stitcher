@@ -1,7 +1,9 @@
+import enum
 import os
 import json
 import concurrent.futures
 import shutil
+from dataclasses import dataclass
 
 from zipfile import ZipFile
 from PIL import Image as pImage
@@ -11,32 +13,32 @@ from terrain_stitcher.util import find_file
 
 NUM_WORKERS = 12
 
-class ExtractData:
-    def __init__(self, compressedFilePath, outputDir) -> None:
-        self.compressedFilePath = compressedFilePath
-        self.outputDir = outputDir
+@dataclass
+class ExtractInfo:
+    compressedFilePath: str
+    outputDir: str
 
-class CopyData: 
-    def __init__(self, extractedFileRootDir, outputDir, chunkName, scaleFactor, compressedDataInfo) -> None: 
-        self.extractedFileRootDir = extractedFileRootDir
-        self.outputDir = outputDir
-        self.chunkName = chunkName
-        self.scaleFactor = scaleFactor
-        self.compressedDataInfo = compressedDataInfo
+@dataclass
+class CopyInfo:
+    extractedFileRootDir: str
+    outputDir: str
+    chunkName: str
+    scaleFactor: float
+    compressedDataInfo: ImageDataWriter
 
-def extractImageDataFile(data : ExtractData) -> str: 
-    if not os.path.isfile(data.compressedFilePath):
+def extractImageDataFile(extractInfo : ExtractInfo) -> str: 
+    if not os.path.isfile(extractInfo.compressedFilePath):
         raise Exception("File not found")
     
-    base = os.path.basename(data.compressedFilePath)
+    base = os.path.basename(extractInfo.compressedFilePath)
     chunk_name, _ = os.path.splitext(base)
-    result_path = os.path.join(data.outputDir, chunk_name)
+    result_path = os.path.join(extractInfo.outputDir, chunk_name)
 
     # Check if the file is a .zip file
-    if data.compressedFilePath.endswith('.zip'):
+    if extractInfo.compressedFilePath.endswith('.zip'):
         # Open the .zip file and extract its contents into the target tmp directory
         if not os.path.exists(result_path):
-            with ZipFile(data.compressedFilePath) as zf:
+            with ZipFile(extractInfo.compressedFilePath) as zf:
                 zf.extractall(result_path)
     else:
         raise Exception("File type not supported")
@@ -44,12 +46,12 @@ def extractImageDataFile(data : ExtractData) -> str:
     return result_path
     
 def extractAll(allTerrainFiles, tmpDir): 
-    extractDatas = [] 
+    extractInfos = [] 
     for file in allTerrainFiles: 
-        extractDatas.append(ExtractData(file, tmpDir))
+        extractInfos.append(ExtractInfo(file, tmpDir))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
-        results = list(executor.map(extractImageDataFile, extractDatas))
+        results = list(executor.map(extractImageDataFile, extractInfos))
 
     return results
 
@@ -76,44 +78,79 @@ def gatherCompressedFiles(inputDir) -> list:
 
     return cFiles
 
-def compareExtension(element : os.PathLike, key : str) -> bool: 
-    root, extension = os.path.splitext(element)
-    return extension is not None and extension == key
+# Image file extensions accepted inside an extracted ortho archive.
+# The ArcGIS import path ships PNGs; the USGS path ships TIFFs.
+class ImageExtensionType(enum.Enum):
+    TIF = ".tif"
+    TIFF = ".tiff"
+    PNG = ".png"
 
-def copyOrthoImage(copyData : CopyData) -> str:
+
+def _extension_values(key) -> set:
+    """Normalize a compare key to a set of lowercase extension strings.
+
+    Accepts an :class:`ImageExtensionType` enum class (any of its members),
+    a single enum member, a single extension string, or a collection of
+    any of those.
+    """
+    if isinstance(key, type) and issubclass(key, enum.Enum):
+        return {m.value.lower() for m in key}
+    if isinstance(key, enum.Enum):
+        return {key.value.lower()}
+    if isinstance(key, (tuple, list, set, frozenset)):
+        out = set()
+        for k in key:
+            out.add(k.value.lower() if isinstance(k, enum.Enum) else str(k).lower())
+        return out
+    return {str(key).lower()}
+
+
+def compareExtension(element : os.PathLike, key) -> bool: 
+    """Match a file's extension against ``key``.
+
+    ``key`` may be an :class:`ImageExtensionType` enum class (matches any of
+    its members), a single enum member, a single extension string, or a
+    collection of those. Comparison is case-insensitive.
+    """
+    _, extension = os.path.splitext(element)
+    if not extension:
+        return False
+    return extension.lower() in _extension_values(key)
+
+def copyOrthoImage(copyInfo : CopyInfo) -> str:
     #work through directory to find file
-    src_ortho_path = find_file(copyData.extractedFileRootDir, ".tif", compareExtension)
-    dst_ortho_path = os.path.join(copyData.outputDir, f"{copyData.chunkName}.png")
+    src_ortho_path = find_file(copyInfo.extractedFileRootDir, ImageExtensionType, compareExtension)
+    dst_ortho_path = os.path.join(copyInfo.outputDir, f"{copyInfo.chunkName}.png")
 
     if src_ortho_path is None:
         raise Exception("Unable to find target source file")
     
     im = pImage.open(src_ortho_path)
 
-    if copyData.scaleFactor != 1.0:
-        new_width = im.width * copyData.scaleFactor
-        new_height = im.height * copyData.scaleFactor
+    if copyInfo.scaleFactor != 1.0:
+        new_width = im.width * copyInfo.scaleFactor
+        new_height = im.height * copyInfo.scaleFactor
         im = im.resize((int(new_width), int(new_height)), resample=pImage.LANCZOS)
 
     im.save(dst_ortho_path)
 
     #also copy the data file too in case its needed later
-    infoFileName = copyData.chunkName + ".json"
-    finalInfoPath = os.path.join(copyData.outputDir, infoFileName)
+    infoFileName = copyInfo.chunkName + ".json"
+    finalInfoPath = os.path.join(copyInfo.outputDir, infoFileName)
     with open(finalInfoPath, 'w') as fJson: 
-        json.dump(copyData.compressedDataInfo.toJSON(), fJson)
+        json.dump(copyInfo.compressedDataInfo.toJSON(), fJson)
 
     return dst_ortho_path
 
 def copyAllOrthoImages(extractedImageRootDirPaths, outputDir, nameToImageWriteData, scaleFactor=1.0): 
-    copyDatas = []
+    copyInfos = []
     for path in extractedImageRootDirPaths:
         file = os.path.basename(path)
 
-        copyDatas.append(CopyData(path, outputDir, file, scaleFactor, nameToImageWriteData[file]))
+        copyInfos.append(CopyInfo(path, outputDir, file, scaleFactor, nameToImageWriteData[file]))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
-        results = list(executor.map(copyOrthoImage, copyDatas))
+        results = list(executor.map(copyOrthoImage, copyInfos))
 
     return results
 
