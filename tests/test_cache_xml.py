@@ -15,8 +15,11 @@ from terrain_stitcher.sources.acquisition import (
     get_acquisition_source,
 )
 
+# The fixture is a coherent perryville ArcGIS cache: conf.xml plus a small
+# _alllayers/L23/R0027e3a0/ tile tree (3 real PNGs).
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "arcgis_cache"
 CONF_XML = FIXTURE_DIR / "conf.xml"
+ALL_LAYERS = FIXTURE_DIR / "_alllayers"
 
 
 @pytest.fixture
@@ -45,7 +48,7 @@ def test_cache_spatial_reference_enum_single_member():
     assert CacheSpatialReference.WGS_1984_Web_Mercator_Auxiliary_Sphere.value == 3857
 
 
-# --- ArcGisCacheInfo.from_xml ----------------------------------------------
+# --- ArcGisCacheInfo.from_xml (perryville fixture) -------------------------
 
 
 def test_from_xml_returns_dataclass(cache_info):
@@ -60,8 +63,8 @@ def test_spatial_reference(cache_info):
 
 
 def test_tile_origin(cache_info):
-    assert cache_info.tile_origin_x == pytest.approx(-20037508.342787001)
-    assert cache_info.tile_origin_y == pytest.approx(20037508.342787001)
+    assert cache_info.tile_origin_x == pytest.approx(-20037508.342787)
+    assert cache_info.tile_origin_y == pytest.approx(20037508.342787)
 
 
 def test_tile_grid(cache_info):
@@ -96,11 +99,17 @@ def test_first_and_last_level_values(cache_info):
     first = cache_info.levels[0]
     assert first.level_id == 0
     assert first.scale == pytest.approx(591657527.591555)
-    assert first.resolution == pytest.approx(156543.03392799999)
+    assert first.resolution == pytest.approx(156543.033928)
 
     last = cache_info.levels[23]
     assert last.level_id == 23
-    assert last.resolution == pytest.approx(0.018661383852976041)
+    assert last.resolution == pytest.approx(0.01866138385297604)
+
+
+def test_fixture_conf_declares_level_matching_real_tiles(cache_info):
+    """The fixture tiles live under _alllayers/L23, so conf.xml must declare
+    level 23 - keeps the fixture cache internally consistent."""
+    assert any(l.level_id == 23 for l in cache_info.levels)
 
 
 # --- error paths -----------------------------------------------------------
@@ -113,9 +122,7 @@ def test_from_xml_missing_file_raises(tmp_path):
 
 def test_from_xml_missing_tile_cache_info_raises(tmp_path):
     bad = tmp_path / "bad.xml"
-    bad.write_text(
-        "<?xml version='1.0'?><CacheInfo></CacheInfo>", encoding="utf-8"
-    )
+    bad.write_text("<?xml version='1.0'?><CacheInfo></CacheInfo>", encoding="utf-8")
     with pytest.raises(ValueError):
         ArcGisCacheInfo.from_xml(str(bad))
 
@@ -123,8 +130,8 @@ def test_from_xml_missing_tile_cache_info_raises(tmp_path):
 def test_from_xml_unsupported_spatial_reference_raises(tmp_path):
     bad = tmp_path / "unsupported.xml"
     bad.write_text(
-        "<?xml version=\"1.0\"?><CacheInfo><TileCacheInfo>"
-        "<SpatialReference><WKT>GEOGCS[\"GCS_WGS_1984\"]</WKT>"
+        '<?xml version="1.0"?><CacheInfo><TileCacheInfo>'
+        '<SpatialReference><WKT>GEOGCS["GCS_WGS_1984"]</WKT>'
         "<WKID>4326</WKID></SpatialReference>"
         "</TileCacheInfo></CacheInfo>",
         encoding="utf-8",
