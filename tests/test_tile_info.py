@@ -126,3 +126,19 @@ def test_from_path_non_hex_col_raises(tmp_path):
     p = _make_tile(al, "L23", "R00000000", "C000000zz")  # 'zz' is not hex
     with pytest.raises(ValueError):
         TileInfo.from_path(p, al)
+
+def test_from_paths_matches_from_path_for_real_fixture():
+    names = ["C00075f6b.png", "C00075f6c.png", "C00075f6d.png"]
+    paths = [str(ALL_LAYERS / "L23" / "R0027e3a0" / n) for n in names]
+    bulk = TileInfo.from_paths(paths, ALL_LAYERS)
+    assert len(bulk) == 3
+    for p, info in zip(paths, bulk):
+        single = TileInfo.from_path(p, ALL_LAYERS)
+        assert info.layer_number == single.layer_number
+        assert info.row_number == single.row_number
+        assert info.col_number == single.col_number
+        assert info.path == single.path
+
+
+def test_from_paths_empty():
+    assert TileInfo.from_paths([], ALL_LAYERS) == []

@@ -1,4 +1,4 @@
-from .acquisition import ArcGisProAcquisitionSource
+﻿from .acquisition import ArcGisProAcquisitionSource
 from .cache_xml import ArcGisCacheInfo, CacheSpatialReference, LevelOfDetailInfo
 from .tile_files import (
     ALL_LAYERS_DIR,
@@ -7,8 +7,10 @@ from .tile_files import (
     all_layers_path,
     gather_tile_files,
 )
-from .tile_info import TileInfo
-from .tile_zip import compress_tile_to_zip, tile_chunk_name
+from .tile_filter import ShapeTileFilter
+from .tile_info import BoundedTileInfo, TileInfo
+from .tile_zip import compress_tile_to_zip, process_tiles, tile_chunk_name, write_tile_sidecar
+from .tile_bounds import TileBoundsCalculator
 
 __all__ = [
     "ArcGisProAcquisitionSource",
@@ -20,7 +22,12 @@ __all__ = [
     "TILE_EXTENSION",
     "all_layers_path",
     "gather_tile_files",
+    "ShapeTileFilter",
+    "BoundedTileInfo",
     "TileInfo",
     "compress_tile_to_zip",
+    "process_tiles",
     "tile_chunk_name",
+    "write_tile_sidecar",
+    "TileBoundsCalculator",
 ]

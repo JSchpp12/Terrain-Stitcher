@@ -172,13 +172,27 @@ def test_factory_constructs_empty_arcgis_source():
     assert src.cache_info is None
 
 
-def test_acquire_loads_cache_then_raises_not_implemented():
+def test_acquire_writes_zips_and_sidecars(tmp_path):
+    import os
+
     src = get_acquisition_source("arcgis")
-    with pytest.raises(NotImplementedError) as exc:
-        src.acquire("shape.json", "out", str(FIXTURE_DIR))
-    assert "24 levels loaded" in str(exc.value)
-    # cache metadata is loaded before the not-implemented raise
-    assert len(src.levels) == 24
+    out = tmp_path / "out"
+    src.acquire(None, str(out), str(FIXTURE_DIR))
+    # one zip + one sidecar per fixture tile
+    from terrain_stitcher.arcgis.tile_zip import tile_chunk_name
+
+    names = ["C00075f6b.png", "C00075f6c.png", "C00075f6d.png"]
+    for n in names:
+        from terrain_stitcher.arcgis.tile_info import TileInfo
+
+        chunk = tile_chunk_name(
+            TileInfo.from_path(
+                FIXTURE_DIR / "_alllayers" / "L23" / "R0027e3a0" / n,
+                FIXTURE_DIR / "_alllayers",
+            )
+        )
+        assert (out / f"{chunk}.zip").is_file()
+        assert (out / f"{chunk}.json").is_file()
 
 
 def test_acquire_without_input_dir_raises_value_error():

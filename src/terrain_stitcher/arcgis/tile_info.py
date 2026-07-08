@@ -1,7 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
+
+from terrain_stitcher.sources import Bounds
 
 
 @dataclass
@@ -26,9 +29,9 @@ class TileInfo:
     @classmethod
     def from_path(
         cls,
-        file_path: str | Path,
-        all_layers_dir: str | Path,
-    ) -> TileInfo:
+        file_path: "str | Path",
+        all_layers_dir: "str | Path",
+    ) -> "TileInfo":
         """Parse a single tile file path into a :class:`TileInfo`.
 
         The expected layout, relative to ``all_layers_dir``, is::
@@ -64,3 +67,61 @@ class TileInfo:
             row_number=int(row_part[1:], 16),
             col_number=int(col_stem[1:], 16),
         )
+
+    @classmethod
+    def from_paths(
+        cls,
+        file_paths: list,
+        all_layers_dir: str | Path,
+    ) -> list["TileInfo"]:
+        """Bulk-construct :class:`TileInfo` from many file paths at once.
+
+        Faster than calling :meth:`from_path` per tile for the thousands-of-
+        files run: it avoids constructing a :class:`Path` per file and calling
+        ``Path.relative_to``. Instead it strips the ``_alllayers`` prefix as a
+        string, splits on the OS separator, and uses C-level ``int()`` for the
+        level (decimal) and row/col (hex).
+        """
+        base = os.fspath(all_layers_dir)
+        prefix = base.rstrip(os.sep) + os.sep
+        infos: list[TileInfo] = []
+
+        for fp in file_paths:
+            fp = os.fspath(fp)
+            if fp.startswith(prefix):
+                rel = fp[len(prefix) :]
+            else:
+                rel = os.path.relpath(fp, base)
+            parts = rel.split(os.sep)
+            if len(parts) != 3:
+                raise ValueError(
+                    f"Expected <L##>/<Rhex>/<Chex>.png relative to all_layers_dir, "
+                    f"got: {rel}"
+                )
+            level_str, row_str, col_file = parts
+            infos.append(
+                cls(
+                    path=Path(rel),
+                    layer_number=int(level_str[1:]),
+                    row_number=int(row_str[1:], 16),
+                    col_number=int(os.path.splitext(col_file)[0][1:], 16),
+                )
+            )
+
+        return infos
+
+
+@dataclass
+class BoundedTileInfo:
+    """A :class:`TileInfo` paired with its computed WGS84 :class:`Bounds`.
+
+    Produced by :meth:`TileBoundsCalculator.bounds_for_all` and consumed by
+    the zip/sidecar processing in :mod:`terrain_stitcher.arcgis.tile_zip`.
+    Bundling the two keeps the (tile, bounds) pair from drifting out of sync
+    as it flows through the parallel processing pipeline -- instead of two
+    parallel lists that must be kept length-aligned by hand, a single list
+    of these dataclasses carries each tile together with its own bounds.
+    """
+
+    tile: "TileInfo"
+    bounds: "Bounds"

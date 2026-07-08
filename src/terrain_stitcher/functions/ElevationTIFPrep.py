@@ -1,5 +1,6 @@
 import os
 import shutil
+from tqdm import tqdm 
 from osgeo import gdal, osr
 
 from terrain_stitcher.util import find_files_with_extension
@@ -10,12 +11,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 MAX_WORKERS = 12
 
-class ElevationData: 
-    def __init__(self, srcFilePath, bounds : World_Bounding_Box): 
+
+class ElevationData:
+    def __init__(self, srcFilePath, bounds: World_Bounding_Box):
         self.srcFilePath = srcFilePath
         self.bounds = bounds
 
-def extractWorldBounds(filePath) -> World_Bounding_Box: 
+
+def extractWorldBounds(filePath) -> World_Bounding_Box:
     # Open the GeoTIFF
     ds = gdal.Open(filePath)
     if ds is None:
@@ -40,7 +43,9 @@ def extractWorldBounds(filePath) -> World_Bounding_Box:
 
     target_crs = osr.SpatialReference()
     target_crs.ImportFromEPSG(4326)
-    target_crs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)  # Ensures (lon, lat) order
+    target_crs.SetAxisMappingStrategy(
+        osr.OAMS_TRADITIONAL_GIS_ORDER
+    )  # Ensures (lon, lat) order
 
     transform = osr.CoordinateTransformation(source_crs, target_crs)
 
@@ -56,47 +61,64 @@ def extractWorldBounds(filePath) -> World_Bounding_Box:
     lats = [pt[0] for pt in lon_lat_corners]
     lons = [pt[1] for pt in lon_lat_corners]
 
-    return World_Bounding_Box(World_Coordinates(min(lats), min(lons)), World_Coordinates(max(lats), max(lons)))
+    return World_Bounding_Box(
+        World_Coordinates(min(lats), min(lons)), World_Coordinates(max(lats), max(lons))
+    )
 
-def buildElevationDataFromFile(filePath : os.PathLike) -> ElevationData: 
+
+def buildElevationDataFromFile(filePath: os.PathLike) -> ElevationData:
     return ElevationData(filePath, extractWorldBounds(filePath))
 
-def getTotalElevationFile(input) -> str: 
+
+def getTotalElevationFile(input) -> str:
     if os.path.isfile(input):
         return input
 
-def copyTotalElevationFile(path, outputDir) -> None: 
-    if not os.path.isfile(path): 
+
+def copyTotalElevationFile(path, outputDir) -> None:
+    if not os.path.isfile(path):
         raise Exception("Elevation file does not exist")
-    
+
     name = os.path.basename(path)
     fPath = os.path.join(outputDir, name)
-    
+
     shutil.copy(path, fPath)
 
-def gatherAllElevationFiles(elevationDataDir : os.PathLike) -> list:
+
+def gatherAllElevationFiles(elevationDataDir: os.PathLike) -> list:
     elevationFiles = []
 
     for ele in os.listdir(elevationDataDir):
         root, ext = os.path.splitext(ele)
-        if ext == ".tif": 
+        if ext == ".tif":
             elevationFiles.append(os.path.join(elevationDataDir, ele))
 
     return elevationFiles
 
-def processAllEleationFiles(elevationDataDir : os.PathLike): 
+
+def process_all_elevation_files(elevationDataDir: os.PathLike):
     allElevationFiles = gatherAllElevationFiles(elevationDataDir)
 
-    results = None
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        results = list(executor.map(buildElevationDataFromFile, allElevationFiles))
+        # executor.map yields results in submission order as they complete;
+        # wrap it with tqdm so progress is shown per-file. total is set from the
+        # gathered list so the bar knows the full count up front.
+        results = list(
+            tqdm(
+                executor.map(buildElevationDataFromFile, allElevationFiles),
+                total=len(allElevationFiles),
+                desc="Processing elevation files",
+                unit="file",
+            )
+        )
 
     return results
+
 
 def findContinuousRegions(boxes: list[ElevationData]) -> list[list[World_Bounding_Box]]:
     """
     Groups World_Bounding_Box objects into continuous (overlapping or touching) regions.
-    
+
     Returns a list of groups, where each group is a list of boxes that form
     one continuous region.
     """
@@ -150,10 +172,9 @@ def findContinuousRegions(boxes: list[ElevationData]) -> list[list[World_Boundin
 
     return list(groups.values())
 
+
 def lonIntervalsCover(
-    boxes: list[World_Bounding_Box],
-    target_min_lon: float,
-    target_max_lon: float
+    boxes: list[World_Bounding_Box], target_min_lon: float, target_max_lon: float
 ) -> bool:
     """
     Returns True if the longitude intervals of the given boxes
@@ -181,9 +202,9 @@ def lonIntervalsCover(
 
     return covered_up_to >= target_max_lon
 
+
 def isFullyCovered(
-    target: World_Bounding_Box,
-    region: list[World_Bounding_Box]
+    target: World_Bounding_Box, region: list[World_Bounding_Box]
 ) -> bool:
     """
     Checks whether a target World_Bounding_Box is entirely covered
@@ -205,7 +226,10 @@ def isFullyCovered(
     lat_breaks.add(t_max_lat)
 
     for box in region:
-        for lat in (box.bounds.get_lower_left().get_lat(), box.bounds.get_upper_right().get_lat()):
+        for lat in (
+            box.bounds.get_lower_left().get_lat(),
+            box.bounds.get_upper_right().get_lat(),
+        ):
             if t_min_lat < lat < t_max_lat:
                 lat_breaks.add(lat)
 
@@ -220,18 +244,18 @@ def isFullyCovered(
 
         # Gather all region boxes that cover this lat strip
         covering_boxes = [
-            box for box in region
+            box
+            for box in region
             if box.bounds.get_lower_left().get_lat() <= strip_mid_lat
             and box.bounds.get_upper_right().get_lat() >= strip_mid_lat
         ]
 
         # Merge their lon intervals and check full coverage
-        if not lonIntervalsCover(
-            covering_boxes, t_min_lon, t_max_lon
-        ):
+        if not lonIntervalsCover(covering_boxes, t_min_lon, t_max_lon):
             return False
 
     return True
+
 
 def mergeRegionToBoundingBox(region: list[World_Bounding_Box]) -> World_Bounding_Box:
     """
@@ -248,34 +272,38 @@ def mergeRegionToBoundingBox(region: list[World_Bounding_Box]) -> World_Bounding
         World_Coordinates(lat=str(max_lat), lon=str(max_lon)),
     )
 
-def main(inputDir, outputDir, elevationDataDir : os.PathLike, shapeFile : os.PathLike): 
-    if inputDir is None or (inputDir is not None and not os.path.isdir(inputDir)): 
+
+def main(inputDir, outputDir, elevationDataDir: os.PathLike, shapeFile: os.PathLike):
+    if inputDir is None or (inputDir is not None and not os.path.isdir(inputDir)):
         raise Exception("Input dir is not defined")
-    
+
     shapeFilePath = os.path.join(os.getcwd(), shapeFile)
-    if shapeFilePath is None or shapeFilePath is not None and not os.path.exists(shapeFilePath): 
+    if (
+        shapeFilePath is None
+        or shapeFilePath is not None
+        and not os.path.exists(shapeFilePath)
+    ):
         raise Exception(f"Shape file is invalid: {shapeFilePath}")
-    
-    if not os.path.isdir(outputDir): 
+
+    if not os.path.isdir(outputDir):
         os.mkdir(outputDir)
 
-    elevationData = processAllEleationFiles(elevationDataDir)
+    elevationData = process_all_elevation_files(elevationDataDir)
     coveredAreas = findContinuousRegions(elevationData)
     targetArea = ParseArea.fromJSONFile(shapeFilePath).getTotalRegion()
     foundGeoData = None
-    for area in coveredAreas: 
-        if (isFullyCovered(targetArea, area)):
+    for area in coveredAreas:
+        if isFullyCovered(targetArea, area):
             foundGeoData = area
 
     if foundGeoData is None:
         raise Exception("Failed to find region which encompasses the target shape area")
-    
-    #move the resulting file to the outputDir
-    if not os.path.isdir(outputDir): 
+
+    # move the resulting file to the outputDir
+    if not os.path.isdir(outputDir):
         os.mkdir(outputDir)
 
     src = foundGeoData[0].srcFilePath
     dst = os.path.join(outputDir, os.path.basename(src))
 
     shutil.copy2(src, dst)
-    
