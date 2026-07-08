@@ -67,17 +67,24 @@ def addStitchOrthoArgs(subparser):
     parserGenerate = subparser.add_parser("stitch-ortho")
 
     parserGenerate.add_argument(
-        "-i", "--input", required=True,
+        "-i",
+        "--input",
+        required=True,
         help="prep-ortho output directory (PNGs + height_info.json)",
     )
     parserGenerate.add_argument(
-        "-o", "--output", required=True,
+        "-o",
+        "--output",
+        required=True,
         help="Directory for stitched output",
     )
     parserGenerate.add_argument(
-        "-d", "--dimension", type=int, default=1,
+        "-d",
+        "--dimension",
+        type=int,
+        default=1,
         help="Square side length to combine (2 = 2x2 -> 1 image). "
-             "1 = passthrough (default).",
+        "1 = passthrough (default).",
     )
 
 

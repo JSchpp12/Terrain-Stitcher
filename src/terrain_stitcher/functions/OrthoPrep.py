@@ -13,10 +13,12 @@ from terrain_stitcher.util import find_file
 
 NUM_WORKERS = 12
 
+
 @dataclass
 class ExtractInfo:
     compressedFilePath: str
     outputDir: str
+
 
 @dataclass
 class CopyInfo:
@@ -26,28 +28,30 @@ class CopyInfo:
     scaleFactor: float
     compressedDataInfo: ImageDataWriter
 
-def extractImageDataFile(extractInfo : ExtractInfo) -> str: 
+
+def extractImageDataFile(extractInfo: ExtractInfo) -> str:
     if not os.path.isfile(extractInfo.compressedFilePath):
         raise Exception("File not found")
-    
+
     base = os.path.basename(extractInfo.compressedFilePath)
     chunk_name, _ = os.path.splitext(base)
     result_path = os.path.join(extractInfo.outputDir, chunk_name)
 
     # Check if the file is a .zip file
-    if extractInfo.compressedFilePath.endswith('.zip'):
+    if extractInfo.compressedFilePath.endswith(".zip"):
         # Open the .zip file and extract its contents into the target tmp directory
         if not os.path.exists(result_path):
             with ZipFile(extractInfo.compressedFilePath) as zf:
                 zf.extractall(result_path)
     else:
         raise Exception("File type not supported")
-    
+
     return result_path
-    
-def extractAll(allTerrainFiles, tmpDir): 
-    extractInfos = [] 
-    for file in allTerrainFiles: 
+
+
+def extractAll(allTerrainFiles, tmpDir):
+    extractInfos = []
+    for file in allTerrainFiles:
         extractInfos.append(ExtractInfo(file, tmpDir))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
@@ -55,12 +59,13 @@ def extractAll(allTerrainFiles, tmpDir):
 
     return results
 
-def gatherTerrainInfoFromFiles(inputDir): 
+
+def gatherTerrainInfoFromFiles(inputDir):
     imageFileNameToData = {}
-    for file in os.listdir(inputDir): 
+    for file in os.listdir(inputDir):
         if file.lower().endswith((".json", ".txt")):
             fPath = os.path.join(inputDir, file)
-            with open(fPath) as f: 
+            with open(fPath) as f:
                 jData = json.load(f)
                 imageInfo = ImageDataWriter.fromDict(jData)
 
@@ -69,14 +74,16 @@ def gatherTerrainInfoFromFiles(inputDir):
 
     return imageFileNameToData
 
-def gatherCompressedFiles(inputDir) -> list: 
+
+def gatherCompressedFiles(inputDir) -> list:
     cFiles = []
-    for file in os.listdir(inputDir): 
-        if ".zip" in file: 
+    for file in os.listdir(inputDir):
+        if ".zip" in file:
             fPath = os.path.join(inputDir, file)
             cFiles.append(fPath)
 
     return cFiles
+
 
 # Image file extensions accepted inside an extracted ortho archive.
 # The ArcGIS import path ships PNGs; the USGS path ships TIFFs.
@@ -105,7 +112,7 @@ def _extension_values(key) -> set:
     return {str(key).lower()}
 
 
-def compareExtension(element : os.PathLike, key) -> bool: 
+def compareExtension(element: os.PathLike, key) -> bool:
     """Match a file's extension against ``key``.
 
     ``key`` may be an :class:`ImageExtensionType` enum class (matches any of
@@ -117,14 +124,17 @@ def compareExtension(element : os.PathLike, key) -> bool:
         return False
     return extension.lower() in _extension_values(key)
 
-def copyOrthoImage(copyInfo : CopyInfo) -> str:
-    #work through directory to find file
-    src_ortho_path = find_file(copyInfo.extractedFileRootDir, ImageExtensionType, compareExtension)
+
+def copyOrthoImage(copyInfo: CopyInfo) -> str:
+    # work through directory to find file
+    src_ortho_path = find_file(
+        copyInfo.extractedFileRootDir, ImageExtensionType, compareExtension
+    )
     dst_ortho_path = os.path.join(copyInfo.outputDir, f"{copyInfo.chunkName}.png")
 
     if src_ortho_path is None:
         raise Exception("Unable to find target source file")
-    
+
     im = pImage.open(src_ortho_path)
 
     if copyInfo.scaleFactor != 1.0:
@@ -134,45 +144,49 @@ def copyOrthoImage(copyInfo : CopyInfo) -> str:
 
     im.save(dst_ortho_path)
 
-    #also copy the data file too in case its needed later
+    # also copy the data file too in case its needed later
     infoFileName = copyInfo.chunkName + ".json"
     finalInfoPath = os.path.join(copyInfo.outputDir, infoFileName)
-    with open(finalInfoPath, 'w') as fJson: 
+    with open(finalInfoPath, "w") as fJson:
         json.dump(copyInfo.compressedDataInfo.toJSON(), fJson)
 
     return dst_ortho_path
 
-def copyAllOrthoImages(extractedImageRootDirPaths, outputDir, nameToImageWriteData, scaleFactor=1.0): 
+
+def copyAllOrthoImages(
+    extractedImageRootDirPaths, outputDir, nameToImageWriteData, scaleFactor=1.0
+):
     copyInfos = []
     for path in extractedImageRootDirPaths:
         file = os.path.basename(path)
 
-        copyInfos.append(CopyInfo(path, outputDir, file, scaleFactor, nameToImageWriteData[file]))
+        copyInfos.append(
+            CopyInfo(path, outputDir, file, scaleFactor, nameToImageWriteData[file])
+        )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
         results = list(executor.map(copyOrthoImage, copyInfos))
 
     return results
 
-def createInfoFile(infoFilePath, chunkInfos, imageFileNameToImageInfo): 
+
+def createInfoFile(infoFilePath, chunkInfos, imageFileNameToImageInfo):
     data = {}
 
-    data['images'] = []
-    for info in chunkInfos: 
+    data["images"] = []
+    for info in chunkInfos:
         infoName = str(os.path.basename(info)).removesuffix(".png")
         imageInfo = imageFileNameToImageInfo[infoName]
 
-        imageData = {
-            "name": infoName, 
-            "bounds": imageInfo.bounds.toJSON()
-        }
-        data['images'].append(imageData)
-    
-    with open(infoFilePath, 'w') as file: 
+        imageData = {"name": infoName, "bounds": imageInfo.bounds.toJSON()}
+        data["images"].append(imageData)
+
+    with open(infoFilePath, "w") as file:
         json.dump(data, file)
 
+
 def main(inputDir, outputDir, scaleFactor):
-    if not os.path.isdir(inputDir): 
+    if not os.path.isdir(inputDir):
         raise Exception("Input directory does not exist")
 
     if not os.path.isdir(outputDir):
@@ -184,19 +198,21 @@ def main(inputDir, outputDir, scaleFactor):
 
     imageFileNameToImageInfo = gatherTerrainInfoFromFiles(inputDir)
 
-    #extract ortho files
+    # extract ortho files
     compressedFiles = gatherCompressedFiles(inputDir)
     print("Extracting compressed archives...")
     extractedPaths = extractAll(compressedFiles, tmpDir)
     print("Done")
 
-    #copy orthoimage files
+    # copy orthoimage files
     print("Processing image files...")
-    copyFiles = copyAllOrthoImages(extractedPaths, outputDir, imageFileNameToImageInfo, scaleFactor)
+    copyFiles = copyAllOrthoImages(
+        extractedPaths, outputDir, imageFileNameToImageInfo, scaleFactor
+    )
     print("Done")
 
     print("Finalizing dataset info...")
-    #prepare data for starlight application
+    # prepare data for starlight application
     infoFile = os.path.join(outputDir, "height_info.json")
     createInfoFile(infoFile, copyFiles, imageFileNameToImageInfo)
 
