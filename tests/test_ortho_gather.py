@@ -77,6 +77,7 @@ def test_build_tile_grid_2x2_nw_origin(tmp_path):
 
 def test_stitch_no_overlap_one_complete_group(tmp_path):
     _write_manifest(tmp_path, NO_OVERLAP_IMAGES)
+    _write_dummy_pngs(tmp_path, ["tile_0_0", "tile_0_1", "tile_1_0", "tile_1_1"])
     out = tmp_path / "out"
     groups = stitch_main(str(tmp_path), str(out), dimension=2)
 
@@ -89,7 +90,7 @@ def test_stitch_no_overlap_one_complete_group(tmp_path):
     # root is the NW tile
     assert gt.root.name == "tile_0_0"
     # traversal reproduces the 2x2 layout
-    pos = gt.traverse()
+    pos = gt.get_traversal()
     assert set(pos.keys()) == {(0, 0), (0, 1), (1, 0), (1, 1)}
     assert pos[(0, 0)].name == "tile_0_0"
     assert pos[(1, 1)].name == "tile_1_1"
@@ -97,6 +98,7 @@ def test_stitch_no_overlap_one_complete_group(tmp_path):
 
 def test_stitch_dimension_one_is_passthrough(tmp_path):
     _write_manifest(tmp_path, NO_OVERLAP_IMAGES)
+    _write_dummy_pngs(tmp_path, ["tile_0_0", "tile_0_1", "tile_1_0", "tile_1_1"])
     out = tmp_path / "out"
     groups = stitch_main(str(tmp_path), str(out), dimension=1)
     # dimension=1 -> every tile is its own 1-tile group
@@ -104,7 +106,7 @@ def test_stitch_dimension_one_is_passthrough(tmp_path):
     for gt in groups:
         assert isinstance(gt, GatheredTiles)
         assert len(gt.tiles) == 1
-        assert gt.traverse() == {(0, 0): gt.root}
+        assert gt.get_traversal() == {(0, 0): gt.root}
 
 
 def test_stitch_with_overlaps_raises(tmp_path):
@@ -114,9 +116,11 @@ def test_stitch_with_overlaps_raises(tmp_path):
         stitch_main(str(tmp_path), str(out), dimension=2)
 
 
-def test_partition_leftovers_for_incomplete_block(tmp_path):
-    # 3x3 grid (9 tiles), dimension=2 -> only the top-left 2x2 is complete;
-    # the remaining 5 tiles become 1-tile leftover groups.
+def test_partition_partial_windows_for_incomplete_block(tmp_path):
+    # 3x3 grid (9 tiles), dimension=2 -> four 2x2 windows. The top-left is a
+    # complete 2x2 (4 tiles); the other three are partial edge windows that
+    # are each stitched into one group rather than split into single-tile
+    # leftovers.
     images = [
         _tile_entry(f"t_{r}_{c}", 3 - r, 2 - r, c, c + 1)
         for r in range(3) for c in range(3)
@@ -129,12 +133,13 @@ def test_partition_leftovers_for_incomplete_block(tmp_path):
         for n, b in nameToBounds.items()
     }
     groups = partitionGroups(grid, nameToTile, 2)
-    # one complete 2x2 group (4 tiles) + 5 leftover 1-tile groups = 6 groups
-    assert len(groups) == 6
+    # one complete 2x2 (4 tiles) + three partial windows (2, 2, 1 tiles) = 4
+    assert len(groups) == 4
     complete = [g for g in groups if len(g.tiles) == 4]
-    leftovers = [g for g in groups if len(g.tiles) == 1]
+    partials = [g for g in groups if len(g.tiles) < 4]
     assert len(complete) == 1
-    assert len(leftovers) == 5
+    assert len(partials) == 3
+    assert sorted(len(g.tiles) for g in partials) == [1, 2, 2]
     assert complete[0].origin == (0, 0)
 
 
@@ -232,16 +237,3 @@ def test_paste_tiles_preserves_alpha(tmp_path):
     assert canvas.getpixel((0, 0)) == (0, 0, 0, 0)
     # an opaque tile's quadrant keeps its color and full alpha
     assert canvas.getpixel((10, 0)) == (200, 100, 50, 255)
-
-
-def test_paste_tiles_requires_create_merged_image_first(tmp_path):
-    from PIL import Image as pImage
-
-    _write_manifest(tmp_path, NO_OVERLAP_IMAGES)
-    _write_dummy_pngs(tmp_path, ["tile_0_0", "tile_0_1", "tile_1_0", "tile_1_1"])
-    out = tmp_path / "out"
-    groups = stitch_main(str(tmp_path), str(out), dimension=2)
-
-    blank = pImage.new("RGB", (1, 1))
-    with pytest.raises(ValueError, match="cell size unknown"):
-        groups[0].pasteTiles(blank)

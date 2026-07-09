@@ -3,17 +3,20 @@
 import enum
 import os
 import json
+import shutil
 import warnings
 from dataclasses import dataclass
 from typing import Optional
 
 from PIL import Image as pImage
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from terrain_stitcher.common import World_Coordinates, get_all_files_in_directory
 from terrain_stitcher.common.tile_overlap import FindOverlappingChunks
 from terrain_stitcher.sources import Bounds
 
+from tqdm import tqdm
 
-# --- direction helpers ------------------------------------------------------
 
 class TileSide(enum.Enum):
     NORTH = "north"
@@ -22,47 +25,18 @@ class TileSide(enum.Enum):
     WEST = "west"
 
 
-# (drow, dcol) used when traversing a group's tree from its root.
-_SIDE_OFFSET = {
-    TileSide.NORTH: (-1, 0),
-    TileSide.EAST: (0, 1),
-    TileSide.SOUTH: (1, 0),
-    TileSide.WEST: (0, -1),
-}
-
-_OPPOSITE = {
-    TileSide.NORTH: TileSide.SOUTH,
-    TileSide.SOUTH: TileSide.NORTH,
-    TileSide.EAST: TileSide.WEST,
-    TileSide.WEST: TileSide.EAST,
-}
-
-
-# --- data structures --------------------------------------------------------
-
 @dataclass
 class Tile:
-    """A single ortho tile and its links to neighbors within its group.
+    """A single ortho tile and its geographic bounds.
 
-    Links are nullable: a tile on the edge of a group, or next to a hole,
-    has None on that side. Links only ever connect tiles inside the same
-    GatheredTiles group.
+    A tile carries no neighbor/position state of its own; placement within a
+    merged image comes from the window-relative positions captured on its
+    GatheredTiles group (snapshotted from the grid at partition time).
     """
+
     name: str
     image_path: str
     bounds: Bounds
-    north: Optional["Tile"] = None
-    east: Optional["Tile"] = None
-    south: Optional["Tile"] = None
-    west: Optional["Tile"] = None
-
-    def neighbor(self, side: TileSide) -> Optional["Tile"]:
-        return getattr(self, side.value)
-
-    def link(self, side: TileSide, other: "Tile") -> None:
-        """Set the link on this side and the opposite link on the neighbor."""
-        setattr(self, side.value, other)
-        setattr(other, _OPPOSITE[side].value, self)
 
     # edge helpers (bounds corners are rectangular for both USGS & ArcGIS tiles)
     def north_lat(self) -> float:
@@ -80,48 +54,40 @@ class Tile:
 
 @dataclass
 class GatheredTiles:
-    """One output image's worth of tiles (1..N**2), arranged as a tree.
+    """One output image's worth of tiles, placed by explicit positions.
 
-    Each GatheredTiles produces exactly one output image:
-      - a complete N x N block -> N**2 tiles linked into a tree
-      - a leftover tile from an incomplete block -> a 1-tile group (root only)
+    Each GatheredTiles produces exactly one output image: the tiles of one
+    N x N window of the global grid. A complete window has N**2 tiles; a
+    partial window (edge band, or a window with holes) has fewer. Every
+    present tile is placed at its window-relative (row, col); absent cells
+    (holes / out-of-grid) are simply not present and stay blank on the canvas.
 
-    `origin` is the (row, col) of the block's NW cell in the global grid,
-    used for naming the output image and for computing merged bounds.
+    `positions` is the window-relative {(row, col): Tile} mapping captured
+    from the grid at partition time (0-based against the window's NW cell).
+    `origin` is that NW cell's (row, col) in the global grid, used for naming
+    the output image and for computing merged bounds. `root` is the NW-most
+    present tile, whose image supplies the canvas mode / cell size.
     """
+
     root: Tile
     tiles: list[Tile]
     origin: tuple[int, int] = (0, 0)
     cell_width: int = 0
     cell_height: int = 0
+    positions: Optional[dict[tuple[int, int], Tile]] = None
 
-    def traverse(self) -> dict[tuple[int, int], Tile]:
-        """BFS from root, assigning each tile a relative (row, col) offset.
+    def get_traversal(self) -> dict[tuple[int, int], Tile]:
+        """Return the window-relative {(row, col): Tile} placement map.
 
-        Back-links (neighbor.<opposite> == self) are handled via a visited set.
-        Positions are normalized to a 0-based grid. This is what the paste
-        step uses to lay tiles out in the combined image.
+        Positions are captured from the grid when the group is built, so this
+        is a direct lookup -- no graph traversal, and every present tile
+        (including isolated "islands" surrounded by holes) is included.
         """
-        positions: dict[int, tuple[int, int]] = {id(self.root): (0, 0)}
-        result: dict[tuple[int, int], Tile] = {(0, 0): self.root}
-        queue: list[Tile] = [self.root]
-
-        while queue:
-            cur = queue.pop(0)
-            cr, cc = positions[id(cur)]
-            for side in TileSide:
-                nb = cur.neighbor(side)
-                if nb is None or id(nb) in positions:
-                    continue
-                dr, dc = _SIDE_OFFSET[side]
-                pos = (cr + dr, cc + dc)
-                positions[id(nb)] = pos
-                result[pos] = nb
-                queue.append(nb)
-
-        min_r = min(r for r, _ in result)
-        min_c = min(c for _, c in result)
-        return {(r - min_r, c - min_c): t for (r, c), t in result.items()}
+        if self.positions is None:
+            raise ValueError(
+                "group has no positions; build via partitionGroups/_buildGroup"
+            )
+        return self.positions
 
     def createMergedImage(self) -> "pImage.Image":
         """Create a blank Pillow image sized to hold every tile in this group.
@@ -135,7 +101,7 @@ class GatheredTiles:
         Populates self.cell_width / self.cell_height for the subsequent paste
         step (each tile pastes at (col * cell_width, row * cell_height)).
         """
-        positions = self.traverse()
+        positions = self.get_traversal()
         if not positions:
             raise ValueError("cannot create a merged image for an empty group")
 
@@ -146,9 +112,7 @@ class GatheredTiles:
             mode = src.mode
             self.cell_width, self.cell_height = src.size
 
-        return pImage.new(
-            mode, (cols * self.cell_width, rows * self.cell_height)
-        )
+        return pImage.new(mode, (cols * self.cell_width, rows * self.cell_height))
 
     def pasteTiles(self, canvas: "pImage.Image") -> "pImage.Image":
         """Paste every tile in the group onto `canvas` at its traversed position.
@@ -164,7 +128,7 @@ class GatheredTiles:
                 "cell size unknown; call createMergedImage() before pasteTiles()"
             )
 
-        for (row, col), tile in self.traverse().items():
+        for (row, col), tile in self.get_traversal().items():
             with pImage.open(tile.image_path) as src:
                 src = src.convert(canvas.mode)
                 mask = src if "A" in src.getbands() else None
@@ -175,8 +139,27 @@ class GatheredTiles:
                 )
         return canvas
 
+    def mergedBounds(self) -> Bounds:
+        """Outer envelope of every tile in this group, as a Bounds.
 
-# --- grid reconstruction from centers ---------------------------------------
+        The grid is rectangular and tiles touch (validated by _check_touching),
+        so the envelope is the northernmost/southernmost latitudes and
+        westernmost/easternmost longitudes across all tiles. For a leftover
+        1-tile group this collapses to that tile's own bounds. The center is
+        the envelope midpoint so it stays consistent with the corners.
+        """
+        north = max(t.north_lat() for t in self.tiles)
+        south = min(t.south_lat() for t in self.tiles)
+        west = min(t.west_lon() for t in self.tiles)
+        east = max(t.east_lon() for t in self.tiles)
+        return Bounds(
+            coords_northEast=World_Coordinates(north, east),
+            coords_southEast=World_Coordinates(south, east),
+            coords_southWest=World_Coordinates(south, west),
+            coords_northWest=World_Coordinates(north, west),
+            coords_center=World_Coordinates((north + south) / 2, (east + west) / 2),
+        )
+
 
 def _cluster_tol(values: list[float]) -> float:
     """Tolerance = half the minimum spacing between sorted distinct values.
@@ -222,8 +205,10 @@ def buildTileGrid(nameToBounds: dict) -> list[list[Optional[str]]]:
     """
     names = list(nameToBounds.keys())
     centers = {
-        n: (nameToBounds[n].getCenter().get_lat(),
-            nameToBounds[n].getCenter().get_lon())
+        n: (
+            nameToBounds[n].getCenter().get_lat(),
+            nameToBounds[n].getCenter().get_lon(),
+        )
         for n in names
     }
 
@@ -233,9 +218,7 @@ def buildTileGrid(nameToBounds: dict) -> list[list[Optional[str]]]:
     row_centers = sorted(_cluster(lats, _cluster_tol(lats)), reverse=True)
     col_centers = sorted(_cluster(lons, _cluster_tol(lons)))
 
-    grid: list[list[Optional[str]]] = [
-        [None] * len(col_centers) for _ in row_centers
-    ]
+    grid: list[list[Optional[str]]] = [[None] * len(col_centers) for _ in row_centers]
     for n in names:
         r = _nearest_index(row_centers, centers[n][0])
         c = _nearest_index(col_centers, centers[n][1])
@@ -243,35 +226,23 @@ def buildTileGrid(nameToBounds: dict) -> list[list[Optional[str]]]:
     return grid
 
 
-# --- partitioning into per-group GatheredTiles ------------------------------
-
 def _buildGroup(
     positional_tiles: list[tuple[tuple[int, int], Tile]],
     origin: tuple[int, int],
-    link: bool,
 ) -> GatheredTiles:
-    """Build a GatheredTiles from a list of ((row, col), Tile) entries.
+    """Build a GatheredTiles from one window's ((row, col), Tile) entries.
 
-    When `link` is True (a complete N x N block), within-group neighbor links
-    are wired so the group forms a tree rooted at its NW tile. When False
-    (a leftover), the single tile is the root with no links.
+    `positional_tiles` are window-relative (0-based against the window's NW
+    cell); `origin` is that NW cell's (row, col) in the global grid. The
+    positions are stored verbatim as the group's placement map, so placement
+    is by explicit position rather than graph traversal. `root` is the
+    NW-most present tile (min (row, col)), whose image supplies the canvas
+    mode / cell size.
     """
-    by_pos: dict[tuple[int, int], Tile] = {
-        (r, c): t for (r, c), t in positional_tiles
-    }
+    by_pos: dict[tuple[int, int], Tile] = {(r, c): t for (r, c), t in positional_tiles}
     tiles = [t for _, t in positional_tiles]
     root = by_pos[min(by_pos)]  # min (r, c) lexicographically == NW-most
-
-    if link:
-        for (r, c), tile in positional_tiles:
-            east = by_pos.get((r, c + 1))
-            if east is not None:
-                tile.link(TileSide.EAST, east)
-            south = by_pos.get((r + 1, c))
-            if south is not None:
-                tile.link(TileSide.SOUTH, south)
-
-    return GatheredTiles(root=root, tiles=tiles, origin=origin)
+    return GatheredTiles(root=root, tiles=tiles, origin=origin, positions=by_pos)
 
 
 def partitionGroups(
@@ -279,11 +250,15 @@ def partitionGroups(
     nameToTile: dict,
     dimension: int,
 ) -> list[GatheredTiles]:
-    """Walk the grid in N x N windows and emit one GatheredTiles per output.
+    """Walk the grid in N x N windows and emit one GatheredTiles per window.
 
-    A window is gathered into a single group only if it is a complete N x N
-    block (all cells present and within bounds). Otherwise every present tile
-    in that window becomes its own 1-tile leftover group.
+    Every non-empty window becomes a single group, whether or not it is a
+    complete N x N block. Complete interior windows produce full N x N images;
+    partial edge windows (the grid isn't a multiple of N) and windows with
+    holes produce smaller/ragged merged images with the absent cells left
+    blank. Each present tile is placed at its window-relative (row, col),
+    captured straight from the grid, so no tile is ever dropped (isolated
+    "islands" included) and no single-tile leftovers are emitted.
     """
     rows = len(grid)
     cols = len(grid[0]) if rows else 0
@@ -293,25 +268,19 @@ def partitionGroups(
         for c0 in range(0, cols, dimension):
             r_end = r0 + dimension
             c_end = c0 + dimension
-            full_window = r_end <= rows and c_end <= cols
 
             present: list[tuple[tuple[int, int], Tile]] = []
             for r in range(r0, min(r_end, rows)):
                 for c in range(c0, min(c_end, cols)):
                     name = grid[r][c]
                     if name is not None:
-                        present.append(((r, c), nameToTile[name]))
+                        present.append(((r - r0, c - c0), nameToTile[name]))
 
-            if full_window and len(present) == dimension * dimension:
-                groups.append(_buildGroup(present, (r0, c0), link=True))
-            else:
-                for (r, c), tile in present:
-                    groups.append(_buildGroup([((r, c), tile)], (r, c), link=False))
+            if present:
+                groups.append(_buildGroup(present, (r0, c0)))
 
     return groups
 
-
-# --- validation (global, before partitioning) -------------------------------
 
 # Relative touch tolerance. Adapts to USGS vs ArcGIS tile extents.
 _TOUCH_TOL_FACTOR = 1e-3
@@ -328,32 +297,34 @@ def _warn_if_not_touching(a: Tile, b: Tile, side: TileSide) -> None:
         if gap > tol_w:
             warnings.warn(
                 f'Tiles "{a.name}" and "{b.name}" are east-neighbors but their '
-                f'edges do not touch (lon gap {gap:.6g}).'
+                f"edges do not touch (lon gap {gap:.6g})."
             )
-        if abs(a.north_lat() - b.north_lat()) > tol_h or \
-           abs(a.south_lat() - b.south_lat()) > tol_h:
+        if (
+            abs(a.north_lat() - b.north_lat()) > tol_h
+            or abs(a.south_lat() - b.south_lat()) > tol_h
+        ):
             warnings.warn(
                 f'Tiles "{a.name}" and "{b.name}" (east-neighbors) are '
-                f'vertically misaligned; seam may be offset.'
+                f"vertically misaligned; seam may be offset."
             )
     else:  # SOUTH
         gap = abs(a.south_lat() - b.north_lat())
         if gap > tol_h:
             warnings.warn(
                 f'Tiles "{a.name}" and "{b.name}" are south-neighbors but their '
-                f'edges do not touch (lat gap {gap:.6g}).'
+                f"edges do not touch (lat gap {gap:.6g})."
             )
-        if abs(a.west_lon() - b.west_lon()) > tol_w or \
-           abs(a.east_lon() - b.east_lon()) > tol_w:
+        if (
+            abs(a.west_lon() - b.west_lon()) > tol_w
+            or abs(a.east_lon() - b.east_lon()) > tol_w
+        ):
             warnings.warn(
                 f'Tiles "{a.name}" and "{b.name}" (south-neighbors) are '
-                f'horizontally misaligned; seam may be offset.'
+                f"horizontally misaligned; seam may be offset."
             )
 
 
-def _check_touching(
-    grid: list[list[Optional[str]]], nameToTile: dict
-) -> None:
+def _check_touching(grid: list[list[Optional[str]]], nameToTile: dict) -> None:
     """Warn (not fail) on grid neighbors that don't properly touch/align.
 
     Enumerates every adjacent pair directly from the grid, so cross-group
@@ -394,20 +365,17 @@ def _check_overlaps(tiles: list[Tile], threshold: float = 0.05) -> None:
     raise RuntimeError(
         "Aborting stitch: overlapping tile coverage detected. The downstream "
         "renderer draws every tile without overlap detection, so overlapping "
-        "coverage would be drawn multiple times. Conflicts: "
-        + "; ".join(conflicts)
+        "coverage would be drawn multiple times. Conflicts: " + "; ".join(conflicts)
     )
 
 
-# --- manifest reading -------------------------------------------------------
-
-def readManifest(inputDir: str) -> dict:
+def readManifest(input_dir: str) -> dict:
     """Read the prep-ortho manifest (height_info.json) -> {name: Bounds}.
 
     The manifest lists each tile as {"name", "bounds"}; that is all the graph
     layer needs (no image files are opened in this layer).
     """
-    manifestPath = os.path.join(inputDir, "height_info.json")
+    manifestPath = os.path.join(input_dir, "height_info.json")
     if not os.path.isfile(manifestPath):
         raise Exception("height_info.json not found in input directory")
 
@@ -421,18 +389,53 @@ def readManifest(inputDir: str) -> dict:
     return nameToBounds
 
 
-# --- entrypoint -------------------------------------------------------------
+def _output_stem(origin: tuple[int, int]) -> str:
+    """Filename stem (no extension) for a group's merged image, from its origin."""
+    return f"gathered_r{origin[0]}_c{origin[1]}"
 
-def main(
-    inputDir: str, outputDir: str, dimension: int = 1
-) -> list[GatheredTiles]:
+
+def writeManifest(output_dir: str, groups: list["GatheredTiles"]) -> str:
+    """Write height_info.json describing every merged image produced by gather.
+
+    One entry per group: {"name", "bounds"}, where bounds is the group's merged
+    envelope (Bounds.toJSON). The schema matches what OrthoPrep emits and what
+    readManifest consumes, so the downstream renderer needs no changes. Each
+    entry's name is the saved image's stem (name + ".png" exists on disk).
+    Returns the manifest path.
+    """
+    images = [
+        {"name": _output_stem(g.origin), "bounds": g.mergedBounds().toJSON()}
+        for g in groups
+    ]
+    manifest_path = os.path.join(output_dir, "height_info.json")
+    with open(manifest_path, "w") as f:
+        json.dump({"images": images}, f, indent=2)
+    return manifest_path
+
+
+def process_group(output_dir: os.PathLike, group: GatheredTiles) -> None:
+    image = group.createMergedImage()
+    group.pasteTiles(image)
+    out_name = _output_stem(group.origin) + ".png"
+    image.save(os.path.join(output_dir, out_name))
+
+
+def get_files_to_move(
+    input_dir: os.PathLike, output_dir: os.PathLike, processed_tiles: list[os.PathLike]
+) -> List[os.PathLike]:
+    files: list[os.PathLike] = []
+
+    return files
+
+
+def main(input_dir: str, output_dir: str, dimension: int = 1) -> None:
     if dimension < 1:
         raise ValueError("dimension must be >= 1")
-    if not os.path.isdir(inputDir):
+    if not os.path.isdir(input_dir):
         raise Exception("Input directory does not exist")
-    os.makedirs(outputDir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
 
-    nameToBounds = readManifest(inputDir)
+    nameToBounds = readManifest(input_dir)
     if not nameToBounds:
         raise Exception("No images listed in height_info.json")
 
@@ -441,27 +444,47 @@ def main(
     nameToTile = {
         name: Tile(
             name=name,
-            image_path=os.path.join(inputDir, name + ".png"),
+            image_path=os.path.join(input_dir, name + ".png"),
             bounds=bounds,
         )
         for name, bounds in nameToBounds.items()
     }
 
     print("Validating tile coverage...")
-    _check_touching(grid, nameToTile)                  # warn on gaps/misalignment
-    _check_overlaps(list(nameToTile.values()), 0.05)   # fail on any area overlap
+    _check_touching(grid, nameToTile)  # warn on gaps/misalignment
+    _check_overlaps(list(nameToTile.values()), 0.05)  # fail on any area overlap
 
     print(f"Partitioning into {dimension}x{dimension} groups...")
     groups = partitionGroups(grid, nameToTile, dimension)
-
-    # NEXT STEP (not in this layer):
-    #   - for each GatheredTiles, paste traverse() into one output image
-    #     (mode preserved from the first tile; leftover 1-tile groups -> copy)
-    #   - write gathered_r<origin.r>_c<origin.c>.png + sidecar per group
-    #   - write height_info.json listing exactly the surviving output images
-
     print(
         f"Tile gathering complete: {len(groups)} group(s) from "
         f"{len(nameToTile)} tile(s)"
     )
+
+    out_abs = os.path.abspath(output_dir)
+    max_workers = min(8, os.cpu_count() or 1)
+    print(f"Stitching {len(groups)} group(s)...")
+    with tqdm(total=len(groups), desc="Stitching groups") as pbar:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(process_group, out_abs, group): group
+                for group in groups
+            }
+            for future in as_completed(futures):
+                future.result()  # propagate exceptions
+                pbar.update(1)
+
+    manifest_path = writeManifest(output_dir, groups)
+    print(f"Wrote manifest: {manifest_path} ({len(groups)} image(s))")
+
+    files_in_input = [
+        os.path.basename(f) for f in get_all_files_in_directory(input_dir)
+    ]
+    for input in files_in_input:
+        name_no_ext = os.path.splitext(input)[0]
+        if name_no_ext not in nameToBounds:
+            shutil.copy2(
+                os.path.join(input_dir, input), os.path.join(output_dir, input)
+            )
+
     return groups

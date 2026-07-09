@@ -1,6 +1,6 @@
 import os
 import shutil
-from tqdm import tqdm 
+from tqdm import tqdm
 from osgeo import gdal, osr
 
 from terrain_stitcher.util import find_files_with_extension
@@ -40,6 +40,11 @@ def extractWorldBounds(filePath) -> World_Bounding_Box:
     # Set up coordinate transformation to WGS84 (EPSG:4326)
     source_crs = osr.SpatialReference()
     source_crs.ImportFromWkt(ds.GetProjection())
+    # Interpret the geotransform's (x, y) as (lon/easting, lat/northing), the
+    # traditional GIS order. Without this, GDAL 3's default authority-compliant
+    # order treats a geographic source's input as (lat, lon), swapping the
+    # corners before they are even transformed.
+    source_crs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
 
     target_crs = osr.SpatialReference()
     target_crs.ImportFromEPSG(4326)
@@ -58,8 +63,10 @@ def extractWorldBounds(filePath) -> World_Bounding_Box:
     ]
     lon_lat_corners = [transform.TransformPoint(x, y)[:2] for x, y in corners]
 
-    lats = [pt[0] for pt in lon_lat_corners]
-    lons = [pt[1] for pt in lon_lat_corners]
+    # Under TRADITIONAL_GIS_ORDER, TransformPoint returns (lon, lat, z):
+    # pt[0] is longitude, pt[1] is latitude.
+    lons = [pt[0] for pt in lon_lat_corners]
+    lats = [pt[1] for pt in lon_lat_corners]
 
     return World_Bounding_Box(
         World_Coordinates(min(lats), min(lons)), World_Coordinates(max(lats), max(lons))

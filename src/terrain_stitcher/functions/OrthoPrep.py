@@ -5,6 +5,7 @@ import concurrent.futures
 import shutil
 from dataclasses import dataclass
 
+from tqdm import tqdm
 from zipfile import ZipFile
 from PIL import Image as pImage
 
@@ -54,8 +55,15 @@ def extractAll(allTerrainFiles, tmpDir):
     for file in allTerrainFiles:
         extractInfos.append(ExtractInfo(file, tmpDir))
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
-        results = list(executor.map(extractImageDataFile, extractInfos))
+    with tqdm(total=len(extractInfos), desc="Extracting Compressed Archives") as pbar:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
+            futures = {
+                executor.submit(extractImageDataFile, info): info
+                for info in extractInfos
+            }
+            for future in as_completed(futures):
+                future.result()
+                pbar.update(1)
 
     return results
 
@@ -164,8 +172,14 @@ def copyAllOrthoImages(
             CopyInfo(path, outputDir, file, scaleFactor, nameToImageWriteData[file])
         )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
-        results = list(executor.map(copyOrthoImage, copyInfos))
+    with tqdm(total=len(copyInfos), desc="Extracting Compressed Archives") as pbar:
+        with concrrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
+            futures = {
+                executor.submit(copyOrthoImage, info): info for info in copyInfos
+            }
+            for future in as_completed(futures):
+                future.result()
+                pbar.update(1)
 
     return results
 
