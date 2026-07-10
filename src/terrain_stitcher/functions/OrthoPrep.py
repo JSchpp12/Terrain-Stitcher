@@ -2,6 +2,7 @@ import enum
 import os
 import json
 import concurrent.futures
+from concurrent.futures import as_completed
 import shutil
 from dataclasses import dataclass
 
@@ -55,14 +56,15 @@ def extractAll(allTerrainFiles, tmpDir):
     for file in allTerrainFiles:
         extractInfos.append(ExtractInfo(file, tmpDir))
 
+    results = []
     with tqdm(total=len(extractInfos), desc="Extracting Compressed Archives") as pbar:
         with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
             futures = {
                 executor.submit(extractImageDataFile, info): info
                 for info in extractInfos
             }
-            for future in as_completed(futures):
-                future.result()
+            for future, info in futures.items():
+                results.append(future.result())
                 pbar.update(1)
 
     return results
@@ -172,13 +174,14 @@ def copyAllOrthoImages(
             CopyInfo(path, outputDir, file, scaleFactor, nameToImageWriteData[file])
         )
 
-    with tqdm(total=len(copyInfos), desc="Extracting Compressed Archives") as pbar:
-        with concrrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
+    results = []
+    with tqdm(total=len(copyInfos), desc="Copying Ortho Images") as pbar:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
             futures = {
                 executor.submit(copyOrthoImage, info): info for info in copyInfos
             }
-            for future in as_completed(futures):
-                future.result()
+            for future, info in futures.items():
+                results.append(future.result())
                 pbar.update(1)
 
     return results
