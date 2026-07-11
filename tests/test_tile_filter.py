@@ -86,7 +86,8 @@ def test_acquire_with_shape_includes_only_overlapping_tiles(tmp_path):
 
 def test_acquire_with_far_shape_excludes_all(tmp_path):
     far_shape = tmp_path / "far.json"
-    far_shape.write_text('{"boundsType":"POINT","center":{"lat":0.0,"lon":0.0}}')
+    # New Shape.json format: x/y (floats) plus legacy lat/lon strings.
+    far_shape.write_text('{"boundsType":"POINT","center":{"lat":"0.0","lon":"0.0","x":0.0,"y":0.0}}')
 
     src = ArcGisProAcquisitionSource.from_cache_dir(str(FIXTURE_DIR))
     out = tmp_path / "out"
