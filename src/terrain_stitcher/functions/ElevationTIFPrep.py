@@ -295,6 +295,13 @@ def main(inputDir, outputDir, elevationDataDir: os.PathLike, shapeFile: os.PathL
     if not os.path.isdir(outputDir):
         os.mkdir(outputDir)
 
+    # Pass the shape file through to the output directory so downstream
+    # stages (stitch-ortho, etc.) can consume it without the original CLI
+    # argument being re-supplied. Copied early, before elevation processing,
+    # so it lands in the output even if a later step raises.
+    shapeDest = os.path.join(outputDir, os.path.basename(shapeFilePath))
+    shutil.copy2(shapeFilePath, shapeDest)
+
     elevationData = process_all_elevation_files(elevationDataDir)
     coveredAreas = findContinuousRegions(elevationData)
     targetArea = ParseArea.fromJSONFile(shapeFilePath).getTotalRegion()
@@ -314,3 +321,8 @@ def main(inputDir, outputDir, elevationDataDir: os.PathLike, shapeFile: os.PathL
     dst = os.path.join(outputDir, os.path.basename(src))
 
     shutil.copy2(src, dst)
+
+    # Return the basename of the full-elevation TIF copied into the
+    # output directory so the prep-ortho manifest (height_info.json)
+    # can record it as ``full_terrain_file`` for downstream consumers.
+    return os.path.basename(src)

@@ -140,18 +140,40 @@ class GatheredTiles:
         return canvas
 
     def mergedBounds(self) -> Bounds:
-        """Outer envelope of every tile in this group, as a Bounds.
+        """Total area coverage of every stitched tile in this group, as a Bounds.
 
-        The grid is rectangular and tiles touch (validated by _check_touching),
-        so the envelope is the northernmost/southernmost latitudes and
-        westernmost/easternmost longitudes across all tiles. For a leftover
-        1-tile group this collapses to that tile's own bounds. The center is
-        the envelope midpoint so it stays consistent with the corners.
+        The lat/lon ranges are the min/max latitude and longitude across ALL
+        four corners (NW, NE, SE, SW) of every tile in the group -- not just the
+        named "north"/"south"/"east"/"west" edges. The edge helpers
+        (north_lat/south_lat/...) assume each tile's NW corner holds the
+        max latitude and its SE corner holds the min, which is true for
+        axis-aligned tiles (ArcGIS / Web Mercator) but NOT for tiles whose
+        named corners are not the true extrema (e.g. rotated orthophotos).
+        Using only those edges produced an envelope smaller than the actual
+        stitched coverage, so the downstream GDAL geotransform derived from
+        these ranges was wrong on the stitched output.
+
+        Taking the true min/max over every corner guarantees the ranges span
+        the full stitched area coverage; for axis-aligned tiles the result is
+        identical to the previous edge-only computation. For a leftover 1-tile
+        group this collapses to that tile's own envelope. The center is the
+        envelope midpoint so it stays consistent with the corners, and every
+        value is a float (World_Coordinates parses/validates on construction).
         """
-        north = max(t.north_lat() for t in self.tiles)
-        south = min(t.south_lat() for t in self.tiles)
-        west = min(t.west_lon() for t in self.tiles)
-        east = max(t.east_lon() for t in self.tiles)
+        corners = [
+            corner
+            for t in self.tiles
+            for corner in (
+                t.bounds.coords_northEast,
+                t.bounds.coords_southEast,
+                t.bounds.coords_southWest,
+                t.bounds.coords_northWest,
+            )
+        ]
+        north = max(c.get_lat() for c in corners)
+        south = min(c.get_lat() for c in corners)
+        west = min(c.get_lon() for c in corners)
+        east = max(c.get_lon() for c in corners)
         return Bounds(
             coords_northEast=World_Coordinates(north, east),
             coords_southEast=World_Coordinates(south, east),
@@ -389,27 +411,50 @@ def readManifest(input_dir: str) -> dict:
     return nameToBounds
 
 
+def readFullTerrainFile(input_dir: str) -> Optional[str]:
+    """Read the optional `full_terrain_file` field from height_info.json.
+
+    prep-ortho records the elevation TIF filename here; stitch-ortho must
+    carry it through to its own manifest so the downstream renderer can
+    open the elevation file. Returns None when the field is absent.
+    """
+    manifestPath = os.path.join(input_dir, "height_info.json")
+    if not os.path.isfile(manifestPath):
+        return None
+    with open(manifestPath) as f:
+        data = json.load(f)
+    return data.get("full_terrain_file")
+
+
 def _output_stem(origin: tuple[int, int]) -> str:
     """Filename stem (no extension) for a group's merged image, from its origin."""
     return f"gathered_r{origin[0]}_c{origin[1]}"
 
 
-def writeManifest(output_dir: str, groups: list["GatheredTiles"]) -> str:
+def writeManifest(output_dir: str, groups: list["GatheredTiles"],
+                  full_terrain_file: Optional[str] = None) -> str:
     """Write height_info.json describing every merged image produced by gather.
 
     One entry per group: {"name", "bounds"}, where bounds is the group's merged
     envelope (Bounds.toJSON). The schema matches what OrthoPrep emits and what
     readManifest consumes, so the downstream renderer needs no changes. Each
     entry's name is the saved image's stem (name + ".png" exists on disk).
+
+    `full_terrain_file`, when provided, is re-emitted so the downstream renderer
+    can locate the elevation TIF (required by the consumer; prep-ortho records
+    it in its manifest). Omitted otherwise to match the input.
     Returns the manifest path.
     """
     images = [
         {"name": _output_stem(g.origin), "bounds": g.mergedBounds().toJSON()}
         for g in groups
     ]
+    data = {"images": images}
+    if full_terrain_file:
+        data["full_terrain_file"] = full_terrain_file
     manifest_path = os.path.join(output_dir, "height_info.json")
     with open(manifest_path, "w") as f:
-        json.dump({"images": images}, f, indent=2)
+        json.dump(data, f, indent=2)
     return manifest_path
 
 
@@ -418,14 +463,6 @@ def process_group(output_dir: os.PathLike, group: GatheredTiles) -> None:
     group.pasteTiles(image)
     out_name = _output_stem(group.origin) + ".png"
     image.save(os.path.join(output_dir, out_name))
-
-
-def get_files_to_move(
-    input_dir: os.PathLike, output_dir: os.PathLike, processed_tiles: list[os.PathLike]
-) -> List[os.PathLike]:
-    files: list[os.PathLike] = []
-
-    return files
 
 
 def main(input_dir: str, output_dir: str, dimension: int = 1) -> None:
@@ -438,6 +475,10 @@ def main(input_dir: str, output_dir: str, dimension: int = 1) -> None:
     nameToBounds = readManifest(input_dir)
     if not nameToBounds:
         raise Exception("No images listed in height_info.json")
+
+    # Carry the elevation TIF reference through to the stitched manifest;
+    # the downstream renderer opens it via height_info.json["full_terrain_file"].
+    full_terrain_file = readFullTerrainFile(input_dir)
 
     print("Building tile grid...")
     grid = buildTileGrid(nameToBounds)
@@ -474,13 +515,23 @@ def main(input_dir: str, output_dir: str, dimension: int = 1) -> None:
                 future.result()  # propagate exceptions
                 pbar.update(1)
 
-    manifest_path = writeManifest(output_dir, groups)
+    manifest_path = writeManifest(output_dir, groups, full_terrain_file)
     print(f"Wrote manifest: {manifest_path} ({len(groups)} image(s))")
 
+    # Pass through any non-tile files (elevation TIF, Shape.json,
+    # .star_ignore markers, per-chunk .json, etc.) so the stitched output
+    # directory stays self-contained. The manifest is intentionally NOT
+    # copied: writeManifest() just wrote the authoritative stitched
+    # manifest (one entry per merged image, named gathered_r*_c*), and
+    # the input manifest still carries the original per-tile names --
+    # copying it would clobber the stitched manifest with those original
+    # names.
     files_in_input = [
         os.path.basename(f) for f in get_all_files_in_directory(input_dir)
     ]
     for input in files_in_input:
+        if input == "height_info.json":
+            continue
         name_no_ext = os.path.splitext(input)[0]
         if name_no_ext not in nameToBounds:
             shutil.copy2(

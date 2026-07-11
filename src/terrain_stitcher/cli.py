@@ -1,6 +1,4 @@
 ﻿import argparse
-import shutil
-import os
 
 from terrain_stitcher.functions import (
     main_ortho,
@@ -88,11 +86,6 @@ def addStitchOrthoArgs(subparser):
     )
 
 
-def moveShapeFile(src, outputDir):
-    fPath = os.path.join(outputDir, os.path.basename(src))
-    shutil.copy2(src, fPath)
-
-
 def main():
     parser = argparse.ArgumentParser(
         prog="TerrainStitcher", description="Entrypoint for terrain stitcher tools"
@@ -116,11 +109,15 @@ def main():
             raise ImportError(
                 "prep-ortho requires GDAL/osgeo bindings, which are not installed"
             )
-        main_prep_elevation(
+        # The elevation-prep stage copies the single full-elevation TIF
+        # covering the shape area into the output directory and returns
+        # its filename; record it in height_info.json as full_terrain_file.
+        full_terrain_file = main_prep_elevation(
             args.input, args.output, args.elevationDataDir, args.shapeFile
         )
-        main_prep_ortho(args.input, args.output, float(args.scaleFactor))
-        moveShapeFile(args.shapeFile, args.output)
+        main_prep_ortho(
+            args.input, args.output, float(args.scaleFactor), full_terrain_file
+        )
     elif args.command == "stitch-ortho":
         main_stitch_ortho(args.input, args.output, args.dimension)
     else:

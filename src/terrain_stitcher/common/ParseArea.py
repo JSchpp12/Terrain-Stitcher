@@ -50,12 +50,30 @@ class ParseArea:
             jData = json.load(file)
             bounds = nameToTerrainBoundsType(jData['boundsType'])
             view_distance = jData.get('view_distance', jData.get('range', 10.0))
-            return cls(bounds, World_Coordinates.fromDict(jData['center']), view_distance)
+            center = jData['center']
+            # Shape.json stores the center using "x"/"y" keys (x = longitude,
+            # y = latitude) with numeric values. The legacy "lat"/"lon" format
+            # is still accepted so existing Shape.json files keep working.
+            if 'x' in center and 'y' in center:
+                coords = World_Coordinates(lat=center['y'], lon=center['x'])
+            else:
+                coords = World_Coordinates.fromDict(center)
+            return cls(bounds, coords, view_distance)
         
     def toJSON(self) -> dict: 
+        # The center is written with both the new "x"/"y" keys and the
+        # legacy "lat"/"lon" keys so existing Shape.json consumers keep
+        # working. "x" mirrors the longitude and "y" mirrors the latitude
+        # and are emitted as floats; "lat"/"lon" retain their original
+        # (string) values for backwards compatibility.
         return {
             'boundsType': terrainBoundsTypeToString(self.boundsType),
-            'center': self.center.toJSON(),
+            'center': {
+                'lat': self.center.lat,
+                'lon': self.center.lon,
+                'x': self.center.get_lon(),
+                'y': self.center.get_lat(),
+            },
             'view_distance': self.view_distance
         }
     

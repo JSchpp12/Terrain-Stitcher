@@ -187,8 +187,13 @@ def copyAllOrthoImages(
     return results
 
 
-def createInfoFile(infoFilePath, chunkInfos, imageFileNameToImageInfo):
+def createInfoFile(infoFilePath, chunkInfos, imageFileNameToImageInfo,
+                     full_terrain_file=None):
     data = {}
+
+    # Reference to the full-elevation TIF copied into the output
+    if full_terrain_file:
+        data["full_terrain_file"] = full_terrain_file
 
     data["images"] = []
     for info in chunkInfos:
@@ -202,7 +207,7 @@ def createInfoFile(infoFilePath, chunkInfos, imageFileNameToImageInfo):
         json.dump(data, file)
 
 
-def main(inputDir, outputDir, scaleFactor):
+def main(inputDir, outputDir, scaleFactor, full_terrain_file=None):
     if not os.path.isdir(inputDir):
         raise Exception("Input directory does not exist")
 
@@ -231,7 +236,7 @@ def main(inputDir, outputDir, scaleFactor):
     print("Finalizing dataset info...")
     # prepare data for starlight application
     infoFile = os.path.join(outputDir, "height_info.json")
-    createInfoFile(infoFile, copyFiles, imageFileNameToImageInfo)
+    createInfoFile(infoFile, copyFiles, imageFileNameToImageInfo, full_terrain_file)
 
     print(f"Deleting tmp dir: {tmpDir}")
     shutil.rmtree(tmpDir)
