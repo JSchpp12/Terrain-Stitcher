@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import enum
 import os
@@ -411,19 +411,19 @@ def readManifest(input_dir: str) -> dict:
     return nameToBounds
 
 
-def readFullTerrainFile(input_dir: str) -> Optional[str]:
-    """Read the optional `full_terrain_file` field from height_info.json.
+def readElevationFiles(input_dir: str) -> Optional[list]:
+    """Read the optional ``elevation_files`` field from height_info.json.
 
-    prep-ortho records the elevation TIF filename here; stitch-ortho must
-    carry it through to its own manifest so the downstream renderer can
-    open the elevation file. Returns None when the field is absent.
+    prep-ortho records the list of elevation filenames here; stitch-ortho must
+    carry them through to its own manifest so the downstream renderer can
+    open the elevation files. Returns None when the field is absent.
     """
     manifestPath = os.path.join(input_dir, "height_info.json")
     if not os.path.isfile(manifestPath):
         return None
     with open(manifestPath) as f:
         data = json.load(f)
-    return data.get("full_terrain_file")
+    return data.get("elevation_files")
 
 
 def _output_stem(origin: tuple[int, int]) -> str:
@@ -432,7 +432,7 @@ def _output_stem(origin: tuple[int, int]) -> str:
 
 
 def writeManifest(output_dir: str, groups: list["GatheredTiles"],
-                  full_terrain_file: Optional[str] = None) -> str:
+                  elevation_files: Optional[list] = None) -> str:
     """Write height_info.json describing every merged image produced by gather.
 
     One entry per group: {"name", "bounds"}, where bounds is the group's merged
@@ -440,9 +440,9 @@ def writeManifest(output_dir: str, groups: list["GatheredTiles"],
     readManifest consumes, so the downstream renderer needs no changes. Each
     entry's name is the saved image's stem (name + ".png" exists on disk).
 
-    `full_terrain_file`, when provided, is re-emitted so the downstream renderer
-    can locate the elevation TIF (required by the consumer; prep-ortho records
-    it in its manifest). Omitted otherwise to match the input.
+    ``elevation_files``, when provided, is re-emitted so the downstream renderer
+    can locate the elevation files (required by the consumer; prep-ortho records
+    them in its manifest). Omitted otherwise to match the input.
     Returns the manifest path.
     """
     images = [
@@ -450,8 +450,8 @@ def writeManifest(output_dir: str, groups: list["GatheredTiles"],
         for g in groups
     ]
     data = {"images": images}
-    if full_terrain_file:
-        data["full_terrain_file"] = full_terrain_file
+    if elevation_files:
+        data["elevation_files"] = list(elevation_files)
     manifest_path = os.path.join(output_dir, "height_info.json")
     with open(manifest_path, "w") as f:
         json.dump(data, f, indent=2)
@@ -476,9 +476,9 @@ def main(input_dir: str, output_dir: str, dimension: int = 1) -> None:
     if not nameToBounds:
         raise Exception("No images listed in height_info.json")
 
-    # Carry the elevation TIF reference through to the stitched manifest;
-    # the downstream renderer opens it via height_info.json["full_terrain_file"].
-    full_terrain_file = readFullTerrainFile(input_dir)
+    # Carry the elevation files reference through to the stitched manifest;
+    # the downstream renderer opens them via height_info.json["elevation_files"].
+    elevation_files = readElevationFiles(input_dir)
 
     print("Building tile grid...")
     grid = buildTileGrid(nameToBounds)
@@ -515,7 +515,7 @@ def main(input_dir: str, output_dir: str, dimension: int = 1) -> None:
                 future.result()  # propagate exceptions
                 pbar.update(1)
 
-    manifest_path = writeManifest(output_dir, groups, full_terrain_file)
+    manifest_path = writeManifest(output_dir, groups, elevation_files)
     print(f"Wrote manifest: {manifest_path} ({len(groups)} image(s))")
 
     # Pass through any non-tile files (elevation TIF, Shape.json,

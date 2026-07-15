@@ -20,6 +20,7 @@ class UsgsAcquisitionSource(AcquisitionSource):
         shape_file: str,
         output_dir: str,
         input_dir: str | None = None,
+        num_workers: int | None = None,
     ) -> None:
         sPath = os.path.join(os.getcwd(), shape_file)
         if not os.path.isfile(sPath):

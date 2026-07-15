@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 
@@ -14,6 +14,34 @@ TILE_EXTENSION = ".png"
 def all_layers_path(cache_dir: str) -> str:
     """Resolve the ``_alllayers`` directory for a cache root."""
     return os.path.join(cache_dir, ALL_LAYERS_DIR)
+
+
+def discover_row_dirs(alllayers_dir: str) -> list[str]:
+    """Return sorted paths to every row directory under ``alllayers_dir``.
+
+    The exploded cache layout is ``_alllayers/<L##>/<R######>/<C######.png>``;
+    each ``<R######>`` folder holds all column tiles for one cache row at one
+    level. This enumerates those row folders (one directory per cache row,
+    across every level) so the acquisition source can process one row at a
+    time instead of materialising every tile path up front -- keeping memory
+    bounded when a cache contains millions of tiles.
+
+    Directories are sorted by name (level, then row) for deterministic
+    processing order. Non-directory entries are skipped. Returns an empty
+    list when ``alllayers_dir`` does not exist.
+    """
+    row_dirs: list[str] = []
+    if not os.path.isdir(alllayers_dir):
+        return row_dirs
+    for level_name in sorted(os.listdir(alllayers_dir)):
+        level_dir = os.path.join(alllayers_dir, level_name)
+        if not os.path.isdir(level_dir):
+            continue
+        for row_name in sorted(os.listdir(level_dir)):
+            row_dir = os.path.join(level_dir, row_name)
+            if os.path.isdir(row_dir):
+                row_dirs.append(row_dir)
+    return row_dirs
 
 
 def gather_tile_files(alllayers_dir: str, cache_tile_format: str) -> list[str]:

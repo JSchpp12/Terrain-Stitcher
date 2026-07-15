@@ -9,11 +9,14 @@ from dataclasses import dataclass
 from tqdm import tqdm
 from zipfile import ZipFile
 from PIL import Image as pImage
+from pathlib import Path
 
 from terrain_stitcher.sources import ImageDataWriter
 from terrain_stitcher.util import find_file
 
-NUM_WORKERS = 12
+# Derive worker count from available CPUs so the thread pools scale to the
+# machine instead of using a fixed value. Falls back to 1 if cpu_count() is None.
+NUM_WORKERS = os.cpu_count() or 1
 
 
 @dataclass
@@ -70,19 +73,37 @@ def extractAll(allTerrainFiles, tmpDir):
     return results
 
 
-def gatherTerrainInfoFromFiles(inputDir):
-    imageFileNameToData = {}
-    for file in os.listdir(inputDir):
-        if file.lower().endswith((".json", ".txt")):
-            fPath = os.path.join(inputDir, file)
-            with open(fPath) as f:
-                jData = json.load(f)
-                imageInfo = ImageDataWriter.fromDict(jData)
+def _gatherTerrainInfoFromFile(fPath):
+    with open(fPath) as f:
+        jData = json.load(f)
+        imageInfo = ImageDataWriter.fromDict(jData)
+        name = imageInfo.imageFileName.replace(".zip", "")
+        return name, imageInfo
 
-                name = imageInfo.imageFileName.replace(".zip", "")
+
+def gatherTerrainInfoFromCandidates(candidatePaths: list[Path]):
+    imageFileNameToData = {}
+    with tqdm(total=len(candidatePaths), desc="Gathering Terrain Info") as pbar:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
+            futures = {
+                executor.submit(_gatherTerrainInfoFromFile, path): path
+                for path in candidatePaths
+            }
+            for future, path in futures.items():
+                name, imageInfo = future.result()
                 imageFileNameToData[name] = imageInfo
+                pbar.update(1)
 
     return imageFileNameToData
+
+
+def gatherCandidatePaths(inputDir):
+    candidatePaths: list[Path] = []
+    for file in os.listdir(inputDir):
+        if file.lower().endswith((".json", ".txt")):
+            candidatePaths.append(os.path.join(inputDir, file))
+
+    return candidatePaths
 
 
 def gatherCompressedFiles(inputDir) -> list:
@@ -187,13 +208,16 @@ def copyAllOrthoImages(
     return results
 
 
-def createInfoFile(infoFilePath, chunkInfos, imageFileNameToImageInfo,
-                     full_terrain_file=None):
+def createInfoFile(
+    infoFilePath, chunkInfos, imageFileNameToImageInfo, elevation_files=None
+):
     data = {}
 
-    # Reference to the full-elevation TIF copied into the output
-    if full_terrain_file:
-        data["full_terrain_file"] = full_terrain_file
+    # Reference to the elevation files moved into the output directory.
+    # Stored as a list of filenames so downstream consumers can open each
+    # one rather than relying on a single combined/covering TIF.
+    if elevation_files:
+        data["elevation_files"] = list(elevation_files)
 
     data["images"] = []
     for info in chunkInfos:
@@ -207,7 +231,7 @@ def createInfoFile(infoFilePath, chunkInfos, imageFileNameToImageInfo,
         json.dump(data, file)
 
 
-def main(inputDir, outputDir, scaleFactor, full_terrain_file=None):
+def main(inputDir, outputDir, scaleFactor, elevation_files=None):
     if not os.path.isdir(inputDir):
         raise Exception("Input directory does not exist")
 
@@ -218,7 +242,8 @@ def main(inputDir, outputDir, scaleFactor, full_terrain_file=None):
     if not os.path.isdir(tmpDir):
         os.mkdir(tmpDir)
 
-    imageFileNameToImageInfo = gatherTerrainInfoFromFiles(inputDir)
+    candidates = gatherCandidatePaths(inputDir)
+    imageFileNameToImageInfo = gatherTerrainInfoFromCandidates(candidates)
 
     # extract ortho files
     compressedFiles = gatherCompressedFiles(inputDir)
@@ -236,7 +261,7 @@ def main(inputDir, outputDir, scaleFactor, full_terrain_file=None):
     print("Finalizing dataset info...")
     # prepare data for starlight application
     infoFile = os.path.join(outputDir, "height_info.json")
-    createInfoFile(infoFile, copyFiles, imageFileNameToImageInfo, full_terrain_file)
+    createInfoFile(infoFile, copyFiles, imageFileNameToImageInfo, elevation_files)
 
     print(f"Deleting tmp dir: {tmpDir}")
     shutil.rmtree(tmpDir)

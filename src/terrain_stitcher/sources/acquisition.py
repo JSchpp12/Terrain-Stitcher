@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
@@ -23,6 +23,7 @@ class AcquisitionSource(ABC):
         shape_file: str,
         output_dir: str,
         input_dir: str | None = None,
+        num_workers: int | None = None,
     ) -> None:
         pass
 

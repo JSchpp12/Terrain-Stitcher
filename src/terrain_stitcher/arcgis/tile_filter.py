@@ -61,6 +61,25 @@ class ShapeTileFilter:
         """Projected (min_x, min_y, max_x, max_y) shape region in cache CRS."""
         return self._box
 
+
+    @classmethod
+    def from_box(cls, cache_info: "ArcGisCacheInfo", box: tuple) -> "ShapeTileFilter":
+        """Build a filter from a precomputed projected box, no Transformer.
+
+        ``__init__`` builds a pyproj Transformer only to project the shape
+        region into the cache CRS and store ``self._box``. Once that box is
+        known (the main process computes it once), a worker subprocess can
+        reconstruct a fully-functional filter from just the box + cache_info:
+        ``mask`` only needs ``_box`` and ``_res_by_id``, never the transformer.
+        Bypassing ``__init__`` keeps the non-picklable transformer out of the
+        worker's pickle path.
+        """
+        f = cls.__new__(cls)
+        f._cache = cache_info
+        f._res_by_id = {lvl.level_id: lvl.resolution for lvl in cache_info.levels}
+        f._box = box
+        return f
+
     def __call__(self, tile: TileInfo) -> bool:
         try:
             res = self._res_by_id[tile.layer_number]

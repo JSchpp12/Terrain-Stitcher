@@ -47,6 +47,13 @@ def addDownloadOrthoArgs(subparser):
         "--input",
         help="Source directory for local imports (required for arcgis)",
     )
+    parserGenerate.add_argument(
+        "-w",
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of long-lived worker subprocesses for arcgis gather (default: os.cpu_count()).",
+    )
 
 
 def addPrepOrthoImages(subparser):
@@ -56,7 +63,7 @@ def addPrepOrthoImages(subparser):
     parserGenerate.add_argument("-i", "--input", help="Input directory")
     parserGenerate.add_argument("-f", "--scaleFactor", default=1.0, help="Scale amount")
     parserGenerate.add_argument(
-        "-e", "--elevationDataDir", help="Path to full elevation file location"
+        "-e", "--elevationDataDir", help="Directory containing elevation files to move into the output"
     )
     parserGenerate.add_argument("-s", "--shapeFile")
 
@@ -103,22 +110,19 @@ def main():
     if args.command == "create-bounds":
         main_shape(args.lat, args.lon, args.type, args.viewDistance)
     elif args.command == "gather-ortho":
-        main_ortho(args.shape, args.output, args.source, args.input)
+        main_ortho(args.shape, args.output, args.source, args.input, args.workers)
     elif args.command == "prep-ortho":
-        if main_prep_elevation is None:
-            raise ImportError(
-                "prep-ortho requires GDAL/osgeo bindings, which are not installed"
-            )
-        # The elevation-prep stage copies the single full-elevation TIF
-        # covering the shape area into the output directory and returns
-        # its filename; record it in height_info.json as full_terrain_file.
-        full_terrain_file = main_prep_elevation(
+        # The elevation-prep stage moves every elevation file into the output
+        # directory and returns the list of their filenames; record them in
+        # height_info.json as elevation_files.
+        elevation_files = main_prep_elevation(
             args.input, args.output, args.elevationDataDir, args.shapeFile
         )
         main_prep_ortho(
-            args.input, args.output, float(args.scaleFactor), full_terrain_file
+            args.input, args.output, float(args.scaleFactor), elevation_files
         )
     elif args.command == "stitch-ortho":
         main_stitch_ortho(args.input, args.output, args.dimension)
     else:
         print("Unknown command type")
+

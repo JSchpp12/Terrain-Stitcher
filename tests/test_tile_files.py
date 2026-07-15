@@ -1,5 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from terrain_stitcher.arcgis.tile_files import (
     SUPPORTED_TILE_FORMAT,
     TILE_EXTENSION,
     all_layers_path,
+    discover_row_dirs,
     gather_tile_files,
 )
 
@@ -86,3 +88,59 @@ def test_gather_tile_files_against_real_fixture():
         assert rel.parts[1].startswith("R")
         assert rel.parts[2].startswith("C")
         assert rel.parts[2].lower().endswith(".png")
+
+
+# --- discover_row_dirs ------------------------------------------------------
+
+
+def test_discover_row_dirs_nonexistent_returns_empty(tmp_path):
+    assert discover_row_dirs(str(tmp_path / "does_not_exist")) == []
+
+
+def test_discover_row_dirs_enumerates_row_directories(tmp_path):
+    al = _make_alllayers(tmp_path)
+    rows = discover_row_dirs(str(al))
+    assert len(rows) == 3
+    # Each returned path should be a row directory (depth 2 under _alllayers)
+    for row_dir in rows:
+        rel = Path(row_dir).relative_to(al)
+        assert len(rel.parts) == 2  # <level>/<row>
+
+
+def test_discover_row_dirs_sorted_by_level_then_row(tmp_path):
+    al = tmp_path / ALL_LAYERS_DIR
+    (al / "L02" / "R00000002").mkdir(parents=True)
+    (al / "L00" / "R00000001").mkdir(parents=True)
+    (al / "L00" / "R00000000").mkdir(parents=True)
+    (al / "L01" / "R00000010").mkdir(parents=True)
+
+    rows = discover_row_dirs(str(al))
+    rels = [str(Path(r).relative_to(al)) for r in rows]
+    assert rels == [
+        os.path.join("L00", "R00000000"),
+        os.path.join("L00", "R00000001"),
+        os.path.join("L01", "R00000010"),
+        os.path.join("L02", "R00000002"),
+    ]
+
+
+def test_discover_row_dirs_skips_non_directories(tmp_path):
+    al = tmp_path / ALL_LAYERS_DIR
+    (al / "L00" / "R00000000").mkdir(parents=True)
+    # stray file at the level depth should be skipped
+    (al / "L00").mkdir(parents=True, exist_ok=True)
+    (al / "L00" / "stray.txt").write_bytes(b"")
+    # stray file at the row depth inside a level dir should be skipped
+    (al / "L00" / "notadir.txt").write_bytes(b"")
+
+    rows = discover_row_dirs(str(al))
+    assert len(rows) == 1
+    assert Path(rows[0]).name == "R00000000"
+
+
+def test_discover_row_dirs_against_real_fixture():
+    rows = discover_row_dirs(str(REAL_ALL_LAYERS))
+    assert len(rows) == 1
+    rel = Path(rows[0]).relative_to(REAL_ALL_LAYERS)
+    assert rel.parts[0] == "L23"
+    assert rel.parts[1] == "R0027e3a0"
