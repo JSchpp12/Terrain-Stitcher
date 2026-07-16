@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover - tqdm is a declared dependency
 # I/O-bound zip + json writes; a healthy default pool.
 DEFAULT_TILE_WORKERS = 12
 
-# Sidecar files use .json (prep's gatherTerrainInfoFromFiles reads both .json and .txt).
+# Sidecar files use .json (prep's _findMetadataPath reads both .json and .txt).
 SIDECAR_SUFFIX = ".json"
 
 
@@ -65,7 +65,7 @@ def write_tile_sidecar(
 
     Produces ``<chunk>.json`` containing
     ``{"bounds": {...5 corners...}, "imageFileName": "<chunk>.zip"}``,
-    which is the schema the prep phase's ``gatherTerrainInfoFromFiles`` reads.
+    which is the schema the prep phase's ``_findMetadataPath`` reads.
     Returns the path to the created sidecar.
     """
     chunk = tile_chunk_name(tile)

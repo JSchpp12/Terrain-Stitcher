@@ -5,12 +5,14 @@ from pathlib import Path
 
 from terrain_stitcher.arcgis.tile_info import TileInfo
 from terrain_stitcher.arcgis.tile_zip import compress_tile_to_zip
+from terrain_stitcher.common import World_Coordinates
 from terrain_stitcher.functions.OrthoPrep import (
-    CopyInfo,
     ImageExtensionType,
+    OrthoTask,
     compareExtension,
-    copyOrthoImage,
+    processOrthoImage,
 )
+from terrain_stitcher.sources import Bounds, ImageDataWriter
 from terrain_stitcher.util import find_file
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "arcgis_cache"
@@ -85,35 +87,45 @@ def test_find_file_returns_none_when_only_non_image(tmp_path):
     assert find_file(str(extracted), ImageExtensionType, compareExtension) is None
 
 
-# --- integration: arcgis png-in-zip flows through copyOrthoImage ------------
+# --- integration: arcgis png-in-zip flows through processOrthoImage ----------
 
 
-class _StubInfo:
-    def toJSON(self):
-        return {"bounds": {}, "imageFileName": "stub.zip"}
+def _write_sidecar(zip_path: Path) -> Path:
+    """Write a valid ImageDataWriter sidecar JSON next to a zip (same base name)."""
+    c = World_Coordinates(lat="40.0", lon="-100.0")
+    bounds = Bounds(c, c, c, c, c)  # NE, SE, SW, NW, center
+    chunk = zip_path.stem
+    image_file_name = f"{chunk}.zip"
+    ImageDataWriter(bounds, imageFileName=image_file_name).writeFileContents(
+        str(zip_path.parent), image_file_name, f"{chunk}.json"
+    )
+    return zip_path.parent / f"{chunk}.json"
 
 
-def test_copyOrthoImage_consumes_arcgis_png_zip(tmp_path):
+def test_processOrthoImage_reads_png_from_zip_in_memory(tmp_path):
     # 1. acquisition: compress a real fixture tile into a zip
     src = _real_tile_path("C00075f6b.png")
     tile = TileInfo.from_path(src, ALL_LAYERS)
     zip_path = compress_tile_to_zip(tile, ALL_LAYERS, tmp_path / "acq")
     assert zip_path.is_file()
 
-    # 2. prep: extract the zip (as prep's extractAll would) into a tmp dir
-    extracted = tmp_path / "extracted" / "chunk"
-    extracted.mkdir(parents=True)
-    with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(extracted)
+    # 2. write a valid metadata sidecar next to the zip (same base name)
+    sidecar = _write_sidecar(zip_path)
+    assert sidecar.is_file()
 
-    # 3. prep: copyOrthoImage now finds the .png inside and writes chunk.png
+    # 3. prep: processOrthoImage reads the PNG from the zip in memory and
+    #    writes the output PNG + sidecar JSON to the output dir
     prep_out = tmp_path / "prep"
     prep_out.mkdir()
-    cd = CopyInfo(str(extracted), str(prep_out), "chunk", 1.0, _StubInfo())
-    result = copyOrthoImage(cd)
+    chunk_name, bounds_json = processOrthoImage(
+        OrthoTask(str(zip_path), str(prep_out), 1.0)
+    )
 
-    assert Path(result) == prep_out / "chunk.png"
-    assert (prep_out / "chunk.png").is_file()
-    assert (prep_out / "chunk.png").stat().st_size > 0
+    assert chunk_name == zip_path.stem
+    out_png = prep_out / f"{zip_path.stem}.png"
+    assert out_png.is_file()
+    assert out_png.stat().st_size > 0
     # sidecar json is also written
-    assert (prep_out / "chunk.json").is_file()
+    assert (prep_out / f"{zip_path.stem}.json").is_file()
+    # bounds are returned for the aggregate manifest
+    assert "center" in bounds_json
