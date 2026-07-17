@@ -2,7 +2,6 @@ import os
 import shutil
 
 
-
 def gatherAllElevationFiles(elevationDataDir: os.PathLike) -> list:
     elevationFiles = []
 
@@ -14,11 +13,13 @@ def gatherAllElevationFiles(elevationDataDir: os.PathLike) -> list:
     return elevationFiles
 
 
-def main(inputDir, outputDir, elevationDataDir: os.PathLike, shapeFile: os.PathLike) -> list:
-    """Move every elevation file into ``outputDir`` and return their basenames.
+def main(
+    inputDir, outputDir, elevationDataDir: os.PathLike, shapeFile: os.PathLike
+) -> list:
+    """Copy every elevation file into ``outputDir`` and return their basenames.
 
     The prep-ortho elevation stage no longer selects/combines a single TIF
-    covering the shape area. Instead it moves all elevation files found in
+    covering the shape area. Instead it copies all elevation files found in
     ``elevationDataDir`` straight into the output directory, and returns the
     list of their basenames so the prep-ortho manifest (height_info.json) can
     record them under the ``elevation_files`` key for downstream consumers.
@@ -44,16 +45,15 @@ def main(inputDir, outputDir, elevationDataDir: os.PathLike, shapeFile: os.PathL
     shapeDest = os.path.join(outputDir, os.path.basename(shapeFilePath))
     shutil.copy2(shapeFilePath, shapeDest)
 
-    # Move every elevation file into the output directory instead of
-    # selecting/combining a single covering TIF. The downstream flow reads
+    # Copy every elevation file into the output directory instead of
+    # selecting/combining a single covering TIF. The source directory is left
+    # untouched so a re-run is not destructive. The downstream flow reads
     # the list of filenames from height_info.json["elevation_files"].
     elevationFiles = gatherAllElevationFiles(elevationDataDir)
-    moved = []
+    copied = []
     for src in elevationFiles:
         dst = os.path.join(outputDir, os.path.basename(src))
-        shutil.move(src, dst)
-        moved.append(os.path.basename(src))
+        shutil.copy2(src, dst)
+        copied.append(os.path.basename(src))
 
-    return moved
-
-
+    return copied
