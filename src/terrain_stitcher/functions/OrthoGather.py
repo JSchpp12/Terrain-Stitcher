@@ -1253,10 +1253,22 @@ def stitch_arcgis_import(
     # window's tiles + (for strips) its canvas. Whole-group tasks block
     # before the next group is built, capping giant-canvas concurrency at 1.
     out_abs = os.path.abspath(output_dir)
+    print(f"Resample: {_resample_strategy_label(scale_factor)}")
+    msg = f"Stitching {len(sorted_origins)} group(s) on {num_workers} workers"
+    if resume:
+        msg += " (--resume)"
+    print(msg + "...")
+    skipped = 0
     summaries: list[StitchedGroup] = []
     with ProcessPoolExecutor(max_workers=num_workers) as pool:
-        for origin in sorted_origins:
+        pbar = tqdm(sorted_origins, desc="Stitching groups", unit="grp")
+        for origin in pbar:
             idxs = windows[origin]
+            out_path = os.path.join(out_abs, _output_stem(origin) + ".png")
+            if resume and os.path.isfile(out_path):
+                skipped += 1
+                summaries.append(StitchedGroup(origin=origin, n_tiles=len(idxs)))
+                continue
             group = _build_arcgis_group(
                 origin,
                 nr[idxs],
@@ -1272,7 +1284,11 @@ def stitch_arcgis_import(
             summaries.append(StitchedGroup(origin=origin, n_tiles=len(idxs)))
             del group
             gc.collect()
+        pbar.close()
 
     manifest_path = writeManifestFromEntries(output_dir, entries, elevation_files)
+    done = len(summaries) - skipped
+    note = f" ({skipped} skipped via --resume)" if skipped else ""
+    print(f"Stitched {done} group(s){note}; wrote {len(entries)} image(s).")
     print(f"Wrote manifest: {manifest_path} ({len(entries)} image(s))")
     return summaries
