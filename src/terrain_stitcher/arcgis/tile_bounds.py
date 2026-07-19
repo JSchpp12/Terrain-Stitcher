@@ -183,6 +183,49 @@ class TileBoundsCalculator:
             for i in range(n)
         ]
 
+    def window_bounds(
+        self,
+        level_id: int,
+        r0: int,
+        c0: int,
+        r1: int,
+        c1: int,
+    ) -> Bounds:
+        """WGS84 envelope of the contiguous tile block spanning cache rows
+        ``[r0, r1]`` and cols ``[c0, c1]`` (inclusive), as a 5-corner Bounds.
+
+        For a single-LOD ArcGIS cache the tiles sit on a regular Web Mercator
+        grid, so a group's geographic envelope is exactly the projected
+        rectangle from the NW corner of the (r0, c0) tile to the SE corner of
+        the (r1, c1) tile. Computing it from the block's row/col extent +
+        cache geometry (one reproject of 5 points) replaces storing a
+        per-tile Bounds object for every tile in the group -- which is what
+        lets the streaming import path compute each group's manifest entry
+        without ever materialising per-tile Bounds.
+
+        ``r0/c0`` are the min present row/col in the window and ``r1/c1`` the
+        max, so windows with holes at the edges get the envelope of their
+        present tiles (not the full nominal window), matching the old
+        per-tile ``mergedBounds`` min/max-over-corners semantics.
+        """
+        res = self._resolution_for(level_id)
+        tw = self._cache.tile_cols * res
+        th = self._cache.tile_rows * res
+        ox, oy = self._cache.tile_origin_x, self._cache.tile_origin_y
+
+        x_w = ox + c0 * tw
+        y_n = oy - r0 * th  # rows increase southward
+        x_e = ox + (c1 + 1) * tw  # SE corner of the (r1, c1) tile
+        y_s = oy - (r1 + 1) * th
+        xc, yc = (x_w + x_e) / 2.0, (y_n + y_s) / 2.0
+
+        # NW, NE, SE, SW, center
+        lon, lat = self._to_wgs84.transform(
+            np.array([x_w, x_e, x_e, x_w, xc]),
+            np.array([y_n, y_n, y_s, y_s, yc]),
+        )
+        return self._build_bounds(lon, lat)
+
     @staticmethod
     def _build_bounds(lon, lat) -> Bounds:
         """Build a Bounds from 5 (lon, lat) entries ordered NW, NE, SE, SW, center."""

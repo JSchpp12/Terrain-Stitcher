@@ -2,6 +2,7 @@ import argparse
 
 from terrain_stitcher.functions import (
     main_ortho,
+    main_ortho_arcgis,
     main_shape,
     main_prep_ortho,
     main_prep_elevation,
@@ -54,6 +55,46 @@ def addDownloadOrthoArgs(subparser):
         type=int,
         default=None,
         help="Number of long-lived worker subprocesses for arcgis gather (default: os.cpu_count()).",
+    )
+    # The following options apply to the arcgis source only, which folds the
+    # old prep-ortho + stitch-ortho stages into the import: the cache native
+    # (row, col) grid is composited straight from the source PNGs. Ignored for
+    # the usgs source.
+    parserGenerate.add_argument(
+        "-d",
+        "--dimension",
+        type=int,
+        default=1,
+        help="arcgis only: square side length to combine (2 = 2x2 -> 1 image). "
+        "1 = passthrough (default).",
+    )
+    parserGenerate.add_argument(
+        "-f",
+        "--scaleFactor",
+        type=float,
+        default=1.0,
+        help="arcgis only: downscale each tile by this fraction during "
+        "stitching (0.0 < value <= 1.0; 1.0 = no scaling).",
+    )
+    parserGenerate.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="arcgis only: skip groups whose stitched output already exists.",
+    )
+    parserGenerate.add_argument(
+        "-e",
+        "--elevationDataDir",
+        default=None,
+        help="arcgis only: directory of elevation GeoTIFFs to copy into the "
+        "output and record in the manifest (mirrors prep-ortho -e).",
+    )
+    parserGenerate.add_argument(
+        "--lod",
+        type=int,
+        default=None,
+        help="arcgis only: cache level of detail to stitch. When omitted the "
+        "highest LOD with surviving tiles is used.",
     )
 
 
@@ -181,7 +222,23 @@ def main():
     if args.command == "create-bounds":
         main_shape(args.lat, args.lon, args.type, args.viewDistance)
     elif args.command == "gather-ortho":
-        main_ortho(args.shape, args.output, args.source, args.input, args.workers)
+        if args.source == "arcgis":
+            # The arcgis source folds prep-ortho + stitch-ortho into the
+            # import: one pass over the cache produces the final stitched
+            # output + manifest. -d/-f/--resume/-e/--lod are arcgis-only.
+            main_ortho_arcgis(
+                args.shape,
+                args.input,
+                args.output,
+                dimension=args.dimension,
+                scale_factor=args.scaleFactor,
+                resume=args.resume,
+                workers=args.workers,
+                elevation_data_dir=args.elevationDataDir,
+                lod=args.lod,
+            )
+        else:
+            main_ortho(args.shape, args.output, args.source, args.input, args.workers)
     elif args.command == "prep-ortho":
         # The elevation-prep stage moves every elevation file into the output
         # directory and returns the list of their filenames; record them in

@@ -66,13 +66,14 @@ def test_read_manifest(tmp_path):
 def test_build_tile_grid_2x2_nw_origin(tmp_path):
     _write_manifest(tmp_path, NO_OVERLAP_IMAGES)
     grid = buildTileGrid(readManifest(str(tmp_path)))
-    assert len(grid) == 2
-    assert len(grid[0]) == 2
-    # NW tile at [0][0], rows run north->south, cols west->east
-    assert grid[0][0] == "tile_0_0"
-    assert grid[0][1] == "tile_0_1"
-    assert grid[1][0] == "tile_1_0"
-    assert grid[1][1] == "tile_1_1"
+    # Sparse {(row, col): name}; NW tile at (0, 0), rows north->south,
+    # cols west->east. Absent cells are simply not present.
+    assert grid == {
+        (0, 0): "tile_0_0",
+        (0, 1): "tile_0_1",
+        (1, 0): "tile_1_0",
+        (1, 1): "tile_1_1",
+    }
 
 
 def test_stitch_no_overlap_one_complete_group(tmp_path):

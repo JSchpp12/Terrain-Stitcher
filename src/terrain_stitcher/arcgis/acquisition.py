@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import os
+import numpy as np
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional
@@ -103,17 +104,56 @@ def _process_row_worker(row_dir: str) -> tuple[int, int, int]:
         tile_infos, footprints=footprints
     )
 
-    out : Optional[Path] = None
+    out: Optional[Path] = None
     if _WORKER_OUT is not None:
         out = Path(_WORKER_OUT)
     else:
         raise Exception("Worker output path was never assigned")
-        
+
     out.mkdir(parents=True, exist_ok=True)
     for bounded in bounded_tiles:
         process_tile(bounded, _WORKER_ALL_LAYERS, out)
 
     return (discovered, len(bounded_tiles), filtered_out)
+
+
+def _discover_row_survivors(row_dir: str) -> tuple[str, np.ndarray, np.ndarray]:
+    """Discover surviving tile coordinates for one row dir, no bounds work.
+
+    Mirrors ``_process_row_worker``'s gather -> footprint -> shape-filter
+    pipeline but stops at the filter and returns ONLY the surviving (row,
+    col) integer coordinates as two int64 numpy arrays -- plus the level
+    folder name (e.g. ``L22``). No :class:`TileInfo` / :class:`Bounds` objects
+    cross the process boundary and no WGS84 reprojection runs here.
+
+    Returning bare coordinates (not TileInfo wrappers) is what keeps the
+    driver's resident footprint small enough to stitch caches with tens of
+    millions of tiles: the survivors of the whole cache become one (N, 2)
+    int64 array (~8 bytes/tile) instead of one wrapper object per tile
+    (~hundreds of bytes/tile) plus a full WGS84 Bounds set. The tile's
+    image_path and WGS84 bounds are both derivable later from (lod, row,
+    col) + cache geometry, so they need not be stored per tile up front.
+    """
+    level_folder = Path(row_dir).parent.name
+    tile_paths = gather_tile_files(row_dir, _WORKER_CACHE.cache_tile_format)
+    if not tile_paths:
+        return level_folder, np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+    tile_infos: List[TileInfo] = TileInfo.from_paths(tile_paths, _WORKER_ALL_LAYERS)
+    if _WORKER_CALC is None:
+        raise Exception("Worker calculation for bounding box was never assigned")
+    footprints = _WORKER_CALC.projected_footprints(tile_infos)
+    if _WORKER_FILTER is not None:
+        keep = _WORKER_FILTER.mask(footprints)
+        tile_infos = [t for t, k in zip(tile_infos, keep) if k]
+    if not tile_infos:
+        return level_folder, np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+    rows = np.fromiter(
+        (t.row_number for t in tile_infos), dtype=np.int64, count=len(tile_infos)
+    )
+    cols = np.fromiter(
+        (t.col_number for t in tile_infos), dtype=np.int64, count=len(tile_infos)
+    )
+    return level_folder, rows, cols
 
 
 class ArcGisProAcquisitionSource(AcquisitionSource):
@@ -184,6 +224,116 @@ class ArcGisProAcquisitionSource(AcquisitionSource):
             raise FileNotFoundError(f"Shape file not found: {sPath}")
         region = ParseArea.fromJSONFile(sPath).getTotalRegion()
         return ShapeTileFilter(self.cache_info, region)
+
+    def discover_survivors(
+        self,
+        shape_file: Optional[str],
+        input_dir: Optional[str] = None,
+        num_workers: Optional[int] = None,
+        lod: Optional[int] = None,
+    ) -> tuple[np.ndarray, np.ndarray, str, Optional[int]]:
+        """Return ``(rows, cols, level_folder, chosen_lod)`` for the survivors.
+
+        Walks ``_alllayers`` row-by-row in a worker pool, keeping only tiles
+        whose cache-CRS footprint overlaps the shape region (cheap, no WGS84
+        reprojection -- the same axis-aligned mask the zip path uses). Workers
+        return the surviving (row, col) coordinates as int64 numpy arrays plus
+        the level folder name; the driver selects a single LOD (``lod`` if
+        given, otherwise the highest level with survivors) and concatenates
+        that level's coordinates into two flat int64 arrays.
+
+        No per-tile ``TileInfo``/``Bounds`` objects are retained in the
+        driver, and no WGS84 reprojection runs at all here -- both the tile
+        image_path and a group's WGS84 envelope are derivable later from
+        (lod, row, col) + cache geometry, so storing them per tile for tens
+        of millions of tiles is pure overhead. The survivors of the whole
+        cache become one (N, 2) int64 array (~8 bytes/tile) instead of
+        hundreds of bytes/tile of wrapper objects plus a full Bounds set.
+        A cache contains every LOD it was built at, so scoping to one LOD is
+        what makes the (row, col) grid non-overlapping.
+        """
+        if self._cache_info is None:
+            if input_dir is None:
+                raise ValueError(
+                    "ArcGISPro acquisition requires an input cache "
+                    "directory (-i/--input)"
+                )
+            self._load_from_xml(os.path.join(input_dir, CONF_XML))
+
+        all_layers_dir = os.path.join(str(input_dir), ALL_LAYERS_DIR)
+
+        tile_filter = self._build_tile_filter(shape_file)
+        box = tile_filter.box if tile_filter is not None else None
+
+        row_dirs = discover_row_dirs(all_layers_dir)
+        if not row_dirs:
+            print(f"No tile rows found under {all_layers_dir}; nothing to process.")
+            return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), "", None
+        print(f"Discovered {len(row_dirs)} row directory(s) across all levels.")
+
+        if num_workers is None:
+            num_workers = max(1, (os.cpu_count() or 1))
+        if num_workers < 1:
+            raise ValueError("num_workers must be >= 1")
+
+        # Per-level accumulation of (rows, cols) numpy arrays returned by
+        # workers. Arrays are concatenated for the chosen level only, so
+        # non-chosen levels' arrays are dropped without ever being merged.
+        by_level_rows: dict[int, list[np.ndarray]] = {}
+        by_level_cols: dict[int, list[np.ndarray]] = {}
+        level_folder_by_level: dict[int, str] = {}
+        # Reuse _init_worker with output_dir=None: the discovery worker ignores
+        # _WORKER_OUT (it writes nothing), so the only worker state it needs is
+        # the cache info, calculator, shape filter, and _alllayers root -- all
+        # of which _init_worker already sets up.
+        with ProcessPoolExecutor(
+            max_workers=num_workers,
+            initializer=_init_worker,
+            initargs=(self.cache_info, box, str(all_layers_dir), None),
+        ) as executor:
+            futures = [
+                executor.submit(_discover_row_survivors, row_dir)
+                for row_dir in row_dirs
+            ]
+            for f in tqdm(
+                as_completed(futures),
+                total=len(row_dirs),
+                desc="Scanning rows",
+                unit="row",
+            ):
+                level_folder, rows_np, cols_np = f.result()
+                if rows_np.size == 0:
+                    continue
+                level_id = int(level_folder[1:])
+                by_level_rows.setdefault(level_id, []).append(rows_np)
+                by_level_cols.setdefault(level_id, []).append(cols_np)
+                level_folder_by_level.setdefault(level_id, level_folder)
+
+        if not by_level_rows:
+            if lod is not None:
+                raise ValueError(f"No surviving tiles at LOD {lod}; available LODs: []")
+            return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), "", None
+
+        if lod is not None:
+            if lod not in by_level_rows:
+                available = sorted(by_level_rows)
+                raise ValueError(
+                    f"No surviving tiles at LOD {lod}; available LODs: " f"{available}"
+                )
+            chosen = lod
+        else:
+            chosen = max(by_level_rows.keys())
+        print(f"Selected LOD {chosen} (available LODs: {sorted(by_level_rows)}).")
+
+        rows = np.concatenate(by_level_rows[chosen])
+        cols = np.concatenate(by_level_cols[chosen])
+        level_folder = level_folder_by_level[chosen]
+        # Drop non-chosen levels' arrays now; they are dead weight.
+        for lvl in list(by_level_rows):
+            if lvl != chosen:
+                del by_level_rows[lvl]
+                del by_level_cols[lvl]
+        return rows, cols, level_folder, chosen
 
     def acquire(
         self,

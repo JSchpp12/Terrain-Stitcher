@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import enum
 import os
+import gc
 import json
 import shutil
 import warnings
@@ -37,7 +38,10 @@ class Tile:
 
     name: str
     image_path: str
-    bounds: Bounds
+    # Optional for the ArcGIS streaming path, which derives a group's envelope
+    # from cache geometry instead of storing per-tile Bounds. The USGS path
+    # always sets a real Bounds.
+    bounds: Optional[Bounds]
 
     # edge helpers (bounds corners are rectangular for both USGS & ArcGIS tiles)
     def north_lat(self) -> float:
@@ -265,11 +269,13 @@ def _nearest_index(centers: np.ndarray, values: np.ndarray) -> np.ndarray:
     return np.where(left <= right, i - 1, i).astype(np.intp)
 
 
-def buildTileGrid(nameToBounds: dict) -> list[list[Optional[str]]]:
-    """Place each tile at grid[row][col] using bounds centers.
+def buildTileGrid(nameToBounds: dict) -> dict[tuple[int, int], str]:
+    """Place each tile at grid[(row, col)] using bounds centers.
 
     Rows run north->south (lat desc), cols run west->east (lon asc) so that
-    grid[0][0] is the NW tile. Empty cells (boundaries, holes) are None.
+    (0, 0) is the NW tile. Returns a SPARSE dict: only present cells have
+    entries; absent cells (boundaries, holes) are simply not present, so
+    memory scales with the number of tiles, not the (row, col) span.
 
     Centers and cluster means are computed with numpy so the per-tile nearest-
     center lookup is a single vectorized ``searchsorted`` (O(n log centers))
@@ -301,15 +307,30 @@ def buildTileGrid(nameToBounds: dict) -> list[list[Optional[str]]]:
     col_idx = _nearest_index(col_means_asc, lons)
 
     rows = row_means_asc.shape[0]
-    cols = col_means_asc.shape[0]
 
     # Map ascending row index -> grid row (north at row 0).
     grid_row = (rows - 1) - row_idx_asc
 
-    grid: list[list[Optional[str]]] = [[None] * cols for _ in range(rows)]
+    grid: dict[tuple[int, int], str] = {}
     for name, r, c in zip(names, grid_row.tolist(), col_idx.tolist()):
-        grid[r][c] = name
+        grid[(r, c)] = name
     return grid
+
+
+@dataclass
+class StitchedGroup:
+    """Lightweight summary of one stitched output image from the ArcGIS import.
+
+    The streaming import path processes groups one at a time and drops each
+    GatheredTiles after saving, so it cannot return the full group objects
+    (they would re-materialise the whole cache's tile metadata in memory).
+    Instead it returns one of these per output image -- just the window origin
+    and the tile count -- for callers that want a quick summary. The manifest
+    on disk carries the bounds.
+    """
+
+    origin: tuple[int, int]
+    n_tiles: int
 
 
 def _buildGroup(
@@ -339,40 +360,40 @@ def _buildGroup(
 
 
 def partitionGroups(
-    grid: list[list[Optional[str]]],
+    grid: dict[tuple[int, int], str],
     nameToTile: dict,
     dimension: int,
     scale_factor: float = 1.0,
 ) -> list[GatheredTiles]:
-    """Walk the grid in N x N windows and emit one GatheredTiles per window.
+    """Walk the sparse grid in N x N windows, emit one GatheredTiles per window.
+
+    ``grid`` is a sparse ``{(row, col): name}`` of only the present cells
+    (from buildTileGrid/buildCacheGrid). Each present cell is bucketed into its
+    window by floor-dividing its coordinates by ``dimension``; the window origin
+    is ``(r // dimension) * dimension, (c // dimension) * dimension`` and the
+    tile's window-relative position is the remainder. Empty windows (no
+    present cells) never appear, so this is O(tiles) -- not the O(span) the old
+    dense double-range walk cost, which visited every cell of the full
+    (row, col) extent looking for the handful that weren't None.
 
     Every non-empty window becomes a single group, whether or not it is a
     complete N x N block. Complete interior windows produce full N x N images;
     partial edge windows (the grid isn't a multiple of N) and windows with
     holes produce smaller/ragged merged images with the absent cells left
-    blank. Each present tile is placed at its window-relative (row, col),
-    captured straight from the grid, so no tile is ever dropped (isolated
-    "islands" included) and no single-tile leftovers are emitted.
+    blank. Each present tile is placed at its window-relative (row, col), so no
+    tile is ever dropped (isolated "islands" included) and no single-tile
+    leftovers are emitted. Windows are emitted in row-major order of their
+    origins (sorted), matching the previous dense iteration.
     """
-    rows = len(grid)
-    cols = len(grid[0]) if rows else 0
+    windows: dict[tuple[int, int], list[tuple[tuple[int, int], str]]] = {}
+    for (r, c), name in grid.items():
+        origin = ((r // dimension) * dimension, (c // dimension) * dimension)
+        windows.setdefault(origin, []).append(((r - origin[0], c - origin[1]), name))
+
     groups: list[GatheredTiles] = []
-
-    for r0 in range(0, rows, dimension):
-        for c0 in range(0, cols, dimension):
-            r_end = r0 + dimension
-            c_end = c0 + dimension
-
-            present: list[tuple[tuple[int, int], Tile]] = []
-            for r in range(r0, min(r_end, rows)):
-                for c in range(c0, min(c_end, cols)):
-                    name = grid[r][c]
-                    if name is not None:
-                        present.append(((r - r0, c - c0), nameToTile[name]))
-
-            if present:
-                groups.append(_buildGroup(present, (r0, c0), scale_factor))
-
+    for origin in sorted(windows):
+        present = [(pos, nameToTile[name]) for pos, name in windows[origin]]
+        groups.append(_buildGroup(present, origin, scale_factor))
     return groups
 
 
@@ -418,26 +439,22 @@ def _warn_if_not_touching(a: Tile, b: Tile, side: TileSide) -> None:
             )
 
 
-def _check_touching(grid: list[list[Optional[str]]], nameToTile: dict) -> None:
+def _check_touching(grid: dict[tuple[int, int], str], nameToTile: dict) -> None:
     """Warn (not fail) on grid neighbors that don't properly touch/align.
 
-    Enumerates every adjacent pair directly from the grid, so cross-group
-    neighbor relationships (which partitioning would cut) are still checked.
+    Enumerates every adjacent pair directly from the sparse grid, so cross-
+    group neighbor relationships (which partitioning would cut) are still
+    checked. Walking only the present cells and probing their east/south
+    neighbors by key lookup keeps this O(tiles) instead of O(span).
     """
-    rows = len(grid)
-    cols = len(grid[0]) if rows else 0
-    for r in range(rows):
-        for c in range(cols):
-            name = grid[r][c]
-            if name is None:
-                continue
-            tile = nameToTile[name]
-            east_name = grid[r][c + 1] if c + 1 < cols else None
-            if east_name is not None:
-                _warn_if_not_touching(tile, nameToTile[east_name], TileSide.EAST)
-            south_name = grid[r + 1][c] if r + 1 < rows else None
-            if south_name is not None:
-                _warn_if_not_touching(tile, nameToTile[south_name], TileSide.SOUTH)
+    for (r, c), name in grid.items():
+        tile = nameToTile[name]
+        east_name = grid.get((r, c + 1))
+        if east_name is not None:
+            _warn_if_not_touching(tile, nameToTile[east_name], TileSide.EAST)
+        south_name = grid.get((r + 1, c))
+        if south_name is not None:
+            _warn_if_not_touching(tile, nameToTile[south_name], TileSide.SOUTH)
 
 
 def _check_overlaps(tiles: list[Tile], threshold: float = 0.05) -> None:
@@ -851,19 +868,48 @@ def main(
         f"{len(nameToTile)} tile(s)"
     )
 
-    out_abs = os.path.abspath(output_dir)
     num_workers = max(1, workers if workers is not None else (os.cpu_count() or 1))
+    return stitch_groups(
+        groups,
+        nameToTile,
+        elevation_files,
+        output_dir,
+        num_workers,
+        resume=resume,
+        scale_factor=scale_factor,
+        passthrough_dir=input_dir,
+    )
 
-    # Plan each group using only a light root-tile header read (canvas_meta):
-    # no group canvas is allocated here. Strip-eligible groups become several
-    # row-strip tasks (within-group parallelism, so one big --dimension group
-    # uses every core); the rest -- too few tiles, or a canvas too big to
-    # strip-book -- become one whole-group task whose canvas is allocated in
-    # the worker. A strip group's composite canvas is allocated lazily, only
-    # when its first strip returns, and freed once it's saved, so we never hold
-    # every group's canvas at once. Use --workers to lower concurrency if a run
-    # exhausts memory.
-    pending = []  # (gi, group, out_path, mode, strips_or_None)
+
+def stitch_groups(
+    groups: list["GatheredTiles"],
+    nameToTile: dict,
+    elevation_files: Optional[list],
+    output_dir: str,
+    num_workers: int,
+    resume: bool = False,
+    scale_factor: float = 1.0,
+    passthrough_dir: Optional[str] = None,
+) -> list["GatheredTiles"]:
+    """Composite `groups` into merged PNGs + a height_info.json manifest.
+
+    Shared between the stitch-ortho stage (groups built from a parsed
+    prep-ortho manifest) and the folded ArcGIS import path (groups built
+    straight from the cache grid). Both feed the same strip/ProcessPool
+    composite machinery here, so behaviour -- within-group row-strip
+    parallelism, lazy canvas allocation, atomic temp-then-replace saves,
+    --resume skip, resample strategy -- is identical.
+
+    `passthrough_dir`: when set (the stitch-ortho case), every non-tile file
+    in that directory (elevation TIFs, Shape.json, sidecars, .star_ignore
+    markers) is copied verbatim into `output_dir` so the stitched output
+    stays self-contained. When `None` (the ArcGIS import case, where the
+    input is the multi-million-file cache itself), pass-through is skipped --
+    elevation/shape are handled separately by the caller.
+    """
+    out_abs = os.path.abspath(output_dir)
+
+    pending = []
     skipped = 0
     for gi, group in enumerate(groups):
         out_path = os.path.join(out_abs, _output_stem(group.origin) + ".png")
@@ -883,9 +929,9 @@ def main(
         if pending:
             with ProcessPoolExecutor(max_workers=num_workers) as pool:
                 futures = {}
-                remaining = {}  # gi -> tasks left for this group
-                meta = {}  # gi -> (mode, cols, rows, cell_w, cell_h)
-                canvas_by_gi = {}  # gi -> lazily-allocated composite canvas
+                remaining = {}
+                meta = {}
+                canvas_by_gi = {}
                 out_path_by_gi = {}
                 for gi, group, out_path, mode, strips in pending:
                     out_path_by_gi[gi] = out_path
@@ -911,7 +957,7 @@ def main(
                 for fut in as_completed(futures):
                     kind = futures[fut][0]
                     if kind == "whole":
-                        fut.result()  # propagate worker exceptions
+                        fut.result()
                         pbar.update(1)
                     else:
                         _, gi, r_start = futures[fut]
@@ -929,29 +975,304 @@ def main(
     manifest_path = writeManifest(output_dir, groups, elevation_files)
     print(f"Wrote manifest: {manifest_path} ({len(groups)} image(s))")
 
-    # Pass through any non-tile files (elevation TIF, Shape.json,
-    # .star_ignore markers, per-chunk .json, etc.) so the stitched output
-    # directory stays self-contained. The manifest is intentionally NOT
-    # copied: writeManifest() just wrote the authoritative stitched
-    # manifest (one entry per merged image, named gathered_r*_c*), and
-    # the input manifest still carries the original per-tile names --
-    # copying it would clobber the stitched manifest with those original
-    # names.
-    # Only the per-tile ortho PNGs (<tile_name>.png) are consumed by the
-    # stitch step and re-emitted as merged images, so they are intentionally
-    # not copied. Everything else -- sidecar .json/.txt, Shape.json,
-    # .star_ignore markers, and especially the elevation GeoTIFFs -- is passed
-    # through verbatim, even when it shares a stem with a tile (e.g. an
-    # elevation TIF named after the same grid cell as an ortho tile). Skipping
-    # by stem alone would drop those elevation files and leave the stitched
-    # manifest pointing at files that never made it to the output directory.
-    tile_image_names = {name + ".png" for name in nameToTile}
-    files_in_input = [
-        os.path.basename(f) for f in get_all_files_in_directory(input_dir)
-    ]
-    for input in files_in_input:
-        if input == "height_info.json" or input in tile_image_names:
-            continue
-        shutil.copy2(os.path.join(input_dir, input), os.path.join(output_dir, input))
+    if passthrough_dir is not None:
+        tile_image_names = {name + ".png" for name in nameToTile}
+        files_in_input = [
+            os.path.basename(f) for f in get_all_files_in_directory(passthrough_dir)
+        ]
+        for input in files_in_input:
+            if input == "height_info.json" or input in tile_image_names:
+                continue
+            shutil.copy2(
+                os.path.join(passthrough_dir, input), os.path.join(output_dir, input)
+            )
 
     return groups
+
+
+def _arcgis_tile_path(
+    all_layers_dir: str, level_folder: str, row: int, col: int
+) -> str:
+    """Derive a cache tile's PNG path from its (row, col) + the level folder.
+
+    ArcGIS exploded caches lay tiles out as ``_alllayers/<L##>/R<row:08x>/C<col:08x>.png``
+    with 8-hex zero-padded row/col (the same encoding ``tile_chunk_name``
+    round-trips), so once the level folder name is known the full path is a
+    pure function of (row, col). That lets the streaming import path skip
+    storing one ~120-byte path string per tile (gigabytes for a large cache)
+    and derive paths on demand for just the one window being stitched.
+    """
+    return os.path.join(all_layers_dir, level_folder, f"R{row:08x}", f"C{col:08x}.png")
+
+
+def _build_arcgis_group(
+    origin: tuple[int, int],
+    nr: "np.ndarray",
+    nc: "np.ndarray",
+    min_row: int,
+    min_col: int,
+    all_layers_dir: str,
+    level_folder: str,
+    lod: int,
+    scale_factor: float,
+) -> "GatheredTiles":
+    """Build one window's GatheredTiles from its normalized (row, col) arrays.
+
+    ``nr``/``nc`` are the window's present tiles' NORMALIZED coordinates (i.e.
+    original cache row/col with the global NW-most tile subtracted, so they
+    start at 0). ``origin`` is the window's normalized NW cell
+    ``((nr // dim) * dim, (nc // dim) * dim)``. The window-relative paste
+    position is ``nr - origin_r`` / ``nc - origin_c`` (in ``[0, dim)``); the
+    cache-native (row, col) for the image_path is recovered as
+    ``nr + min_row`` / ``nc + min_col``. Keeping the window-relative position
+    small is what keeps each group's canvas ``cols * cell_w`` by
+    ``rows * cell_h`` sized to the window (not the full cache coordinate
+    span) -- without it a 1-tile group at a high LOD would ask for a canvas
+    millions of tiles wide.
+
+    image_path is derived from (row, col) + the level folder (no stored path
+    strings) and no per-tile Bounds are built (a group's envelope is computed
+    from its row/col extent + cache geometry at manifest time). This is the
+    per-group working set of the streaming import: it exists only for the
+    window currently being stitched and is dropped immediately after.
+    """
+    r0n, c0n = origin
+    positions: dict[tuple[int, int], Tile] = {}
+    tiles: list[Tile] = []
+    for r, c in zip(nr.tolist(), nc.tolist()):
+        pos = (int(r) - r0n, int(c) - c0n)  # window-relative, in [0, dim)
+        actual_row = int(r) + min_row
+        actual_col = int(c) + min_col
+        name = f"L{lod:02d}_R{actual_row:08x}_C{actual_col:08x}"
+        tile = Tile(
+            name=name,
+            image_path=_arcgis_tile_path(
+                all_layers_dir, level_folder, actual_row, actual_col
+            ),
+            bounds=None,  # geometry-derived at manifest time, not per tile
+        )
+        positions[pos] = tile
+        tiles.append(tile)
+    root = positions[min(positions)]  # min (r, c) lexicographically == NW-most
+    return GatheredTiles(
+        root=root,
+        tiles=tiles,
+        origin=origin,
+        positions=positions,
+        scale_factor=scale_factor,
+    )
+
+
+def _stitch_one_group(
+    group: "GatheredTiles",
+    out_abs: str,
+    pool: ProcessPoolExecutor,
+    num_workers: int,
+    resume: bool,
+) -> None:
+    """Stitch a single group to its output PNG, using the shared worker pool.
+
+    One group at a time: either fan its row-strips across the pool (small
+    enough canvas that strips round-trip through IPC) or run the whole group
+    as one pool task with the canvas living inside the worker (giant
+    canvas). Either way the driver holds at most this group's tiles + this
+    group's canvas (strips) or just this group's tiles (whole-group); once
+    the PNG is saved the group is dropped by the caller. Bounding work to
+    one group is what keeps the streaming import's peak memory proportional
+    to one window's tile count instead of the whole cache's.
+    """
+    out_path = os.path.join(out_abs, _output_stem(group.origin) + ".png")
+    if resume and os.path.isfile(out_path):
+        return
+    mode, _cw, _ch = group.canvas_meta()
+    positions = group.get_traversal()
+    rows = max(r for r, _ in positions) + 1
+    cols = max(c for _, c in positions) + 1
+    strips = _plan_strips(group, mode, num_workers)
+    if strips:
+        canvas = pImage.new(mode, (cols * group.cell_width, rows * group.cell_height))
+        fut_to_r = {
+            pool.submit(_stitch_strip, spec): r_start for r_start, spec in strips
+        }
+        for fut in as_completed(fut_to_r):
+            _paste_strip(canvas, fut.result(), fut_to_r[fut], group.cell_height)
+        _save_canvas(canvas, out_path)
+        del canvas
+    else:
+        # Whole-group: canvas is allocated and saved inside the worker, never
+        # round-tripped. We submit one task and block on it before the next
+        # group, so only one giant canvas is live at a time regardless of
+        # num_workers (which would otherwise run num_workers multi-GB
+        # canvases concurrently and blow the commit limit).
+        pool.submit(process_group, out_abs, group, resume).result()
+
+
+def writeManifestFromEntries(
+    output_dir: str,
+    entries: list[dict],
+    elevation_files: Optional[list] = None,
+) -> str:
+    """Write height_info.json from precomputed per-image entries.
+
+    Each entry is ``{"name", "bounds"}`` (bounds already a JSON-able dict).
+    Used by the streaming ArcGIS import, which computes each group's envelope
+    from cache geometry (not from in-memory GatheredTiles) and processes
+    groups one at a time, so the manifest can't be built by re-iterating a
+    list of groups at the end the way ``writeManifest`` does.
+    """
+    data = {"images": entries}
+    if elevation_files:
+        data["elevation_files"] = list(elevation_files)
+    manifest_path = os.path.join(output_dir, "height_info.json")
+    with open(manifest_path, "w") as f:
+        json.dump(data, f, indent=2)
+    return manifest_path
+
+
+def stitch_arcgis_import(
+    shape_file: Optional[str],
+    cache_dir: str,
+    output_dir: str,
+    dimension: int = 1,
+    scale_factor: float = 1.0,
+    resume: bool = False,
+    workers: Optional[int] = None,
+    elevation_data_dir: Optional[str] = None,
+    lod: Optional[int] = None,
+) -> list["StitchedGroup"]:
+    """Import an ArcGISPro tile cache directly into stitched output.
+
+    Folds the old gather-ortho --source arcgis -> prep-ortho -> stitch-ortho
+    chain into one pass. The cache native (row, col) grid partitions the
+    surviving tiles into N x N windows, which are composited straight from the
+    source PNGs in _alllayers (no per-tile zip / unzip / re-encode
+    round-trip). The output -- merged gathered_r*_c*.png images plus a
+    height_info.json manifest -- is the same schema the separate
+    stitch-ortho stage produced, so the downstream renderer needs no changes.
+
+    `lod` selects the cache level of detail to stitch; when None the highest
+    LOD with surviving tiles is used. A cache ships every LOD it was built
+    at, so scoping to one LOD is what keeps the (row, col) grid
+    non-overlapping (mixing LODs would stack differently-resolutioned tiles
+    over the same ground).
+
+    Memory model: this is the streaming path for very large caches. Discovery
+    returns the survivors as int64 (row, col) arrays -- no per-tile
+    TileInfo/Bounds objects, no WGS84 reprojection -- so the whole-cache index
+    is ~8 bytes/tile. Tile paths are derived from (row, col) + the level
+    folder and each group's manifest envelope from its row/col extent + cache
+    geometry, so no per-tile path strings or Bounds are ever stored. Groups
+    are stitched one at a time (one group's tiles + one canvas resident at a
+    time) and dropped after saving, so peak memory is proportional to one
+    window's tile count rather than the whole cache's. Whole-group tasks
+    (giant canvases) run one at a time regardless of ``workers`` so they
+    can't collectively exceed the commit limit; ``workers`` still parallelises
+    the row-strips of smaller, strip-eligible groups.
+    """
+    if dimension < 1:
+        raise ValueError("dimension must be >= 1")
+    if not (0.0 < scale_factor <= 1.0):
+        raise ValueError(
+            "scale_factor must be in (0.0, 1.0]; only downscaling is supported"
+        )
+    if not os.path.isdir(cache_dir):
+        raise Exception("Cache directory does not exist")
+    os.makedirs(output_dir, exist_ok=True)
+    num_workers = max(1, workers if workers is not None else (os.cpu_count() or 1))
+
+    from terrain_stitcher.sources.acquisition import get_acquisition_source
+    from terrain_stitcher.arcgis.tile_bounds import TileBoundsCalculator
+
+    source = get_acquisition_source("arcgis")
+    rows, cols, level_folder, chosen_lod = source.discover_survivors(
+        shape_file, cache_dir, num_workers=num_workers, lod=lod
+    )
+
+    if rows.size == 0:
+        print("No tiles survive the shape filter; nothing to stitch.")
+        writeManifestFromEntries(output_dir, [], None)
+        return []
+
+    print(f"Using LOD {chosen_lod}: {rows.size} tile(s) cover the region")
+
+    all_layers_dir = os.path.join(os.path.abspath(cache_dir), "_alllayers")
+
+    # Elevation: copy the elevation GeoTIFFs + Shape.json into the output and
+    # record their basenames for the manifest, mirroring prep-ortho -e stage.
+    elevation_files = None
+    if elevation_data_dir is not None:
+        from terrain_stitcher.functions.ElevationTIFPrep import (
+            main as copy_elevation,
+        )
+
+        elevation_files = copy_elevation(
+            cache_dir, output_dir, elevation_data_dir, shape_file
+        )
+
+    # Normalize coordinates to 0-based against the NW-most present tile so
+    # window origins start at (0, 0) and output filenames stay tidy.
+    min_row = int(rows.min())
+    min_col = int(cols.min())
+    nr = rows - min_row
+    nc = cols - min_col
+
+    # Bucket each present tile into its N x N window by floor-dividing its
+    # normalized coordinates by `dimension`. Only present cells become
+    # windows, so this is O(tiles) -- no dense (row, col) span allocation.
+    dim = dimension
+    origin_r = (nr // dim) * dim
+    origin_c = (nc // dim) * dim
+    windows: dict[tuple[int, int], list[int]] = {}
+    for i in range(nr.size):
+        origin = (int(origin_r[i]), int(origin_c[i]))
+        windows.setdefault(origin, []).append(i)
+
+    print(f"Partitioning into {dimension}x{dimension} groups...")
+    print(
+        f"Tile gathering complete: {len(windows)} group(s) from " f"{rows.size} tile(s)"
+    )
+
+    # Precompute the manifest entry per window from each window's present
+    # row/col extent + cache geometry (one 5-point reproject per window), so
+    # the manifest does not need any in-memory GatheredTiles.
+    calc = TileBoundsCalculator(source.cache_info)
+    sorted_origins = sorted(windows)
+    entries: list[dict] = []
+    for origin in sorted_origins:
+        idxs = windows[origin]
+        wr = nr[idxs]
+        wc = nc[idxs]
+        r_lo = int(wr.min()) + min_row
+        r_hi = int(wr.max()) + min_row
+        c_lo = int(wc.min()) + min_col
+        c_hi = int(wc.max()) + min_col
+        bounds = calc.window_bounds(chosen_lod, r_lo, c_lo, r_hi, c_hi)
+        entries.append({"name": _output_stem(origin), "bounds": bounds.toJSON()})
+
+    # Stream-stitch one group at a time so the driver holds only the current
+    # window's tiles + (for strips) its canvas. Whole-group tasks block
+    # before the next group is built, capping giant-canvas concurrency at 1.
+    out_abs = os.path.abspath(output_dir)
+    summaries: list[StitchedGroup] = []
+    with ProcessPoolExecutor(max_workers=num_workers) as pool:
+        for origin in sorted_origins:
+            idxs = windows[origin]
+            group = _build_arcgis_group(
+                origin,
+                nr[idxs],
+                nc[idxs],
+                min_row,
+                min_col,
+                all_layers_dir,
+                level_folder,
+                chosen_lod,
+                scale_factor,
+            )
+            _stitch_one_group(group, out_abs, pool, num_workers, resume)
+            summaries.append(StitchedGroup(origin=origin, n_tiles=len(idxs)))
+            del group
+            gc.collect()
+
+    manifest_path = writeManifestFromEntries(output_dir, entries, elevation_files)
+    print(f"Wrote manifest: {manifest_path} ({len(entries)} image(s))")
+    return summaries
