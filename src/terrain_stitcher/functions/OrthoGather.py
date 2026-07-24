@@ -15,6 +15,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from terrain_stitcher.common import World_Coordinates, get_all_files_in_directory
 from terrain_stitcher.common.tile_overlap import FindOverlappingChunks
+from terrain_stitcher.functions.ElevationGeoPrep import DEFAULT_PADDING_DEG
 from terrain_stitcher.sources import Bounds
 
 from tqdm import tqdm
@@ -1129,6 +1130,40 @@ def writeManifestFromEntries(
     return manifest_path
 
 
+# Basename of the single merged elevation GeoTIFF written into the gather-ortho
+# output when -e is supplied. Matches prep-geo's default output name.
+_ELEVATION_MERGED_NAME = "elevation_merged.tif"
+
+
+def _merge_elevation_into_output(
+    shape_file: str,
+    elevation_data_dir: str,
+    output_dir: str,
+    padding_deg: float,
+) -> list:
+    """Merge the elevation GeoTIFFs covering ``shape_file`` into one tif in
+    ``output_dir`` by reusing the prep-geo merge (clip + composite to EPSG:4326).
+
+    gather-ortho -e produces a single continuous elevation GeoTIFF instead of
+    copying the raw tiles. Returns a one-element list holding the merged file's
+    basename, for height_info.json["elevation_files"] (the schema/downstream
+    consumer are unchanged). Shape.json is copied into the output too, since the
+    old copy-elevation path placed it there. ElevationGeoPrep.main is called
+    directly, so an empty elevation dir or a region with no intersecting tile
+    raises exactly as prep-geo does.
+    """
+    from terrain_stitcher.functions.ElevationGeoPrep import main as merge_elevation
+
+    merged_path = merge_elevation(
+        shape_file,
+        elevation_data_dir,
+        os.path.join(output_dir, _ELEVATION_MERGED_NAME),
+        padding_deg=padding_deg,
+    )
+    shutil.copy2(shape_file, os.path.join(output_dir, os.path.basename(shape_file)))
+    return [os.path.basename(merged_path)]
+
+
 def stitch_arcgis_import(
     shape_file: Optional[str],
     cache_dir: str,
@@ -1139,6 +1174,7 @@ def stitch_arcgis_import(
     workers: Optional[int] = None,
     elevation_data_dir: Optional[str] = None,
     lod: Optional[int] = None,
+    elevation_padding_deg: float = DEFAULT_PADDING_DEG,
 ) -> list["StitchedGroup"]:
     """Import an ArcGISPro tile cache directly into stitched output.
 
@@ -1197,16 +1233,22 @@ def stitch_arcgis_import(
 
     all_layers_dir = os.path.join(os.path.abspath(cache_dir), "_alllayers")
 
-    # Elevation: copy the elevation GeoTIFFs + Shape.json into the output and
-    # record their basenames for the manifest, mirroring prep-ortho -e stage.
+    # Elevation: merge the GeoTIFFs covering the shape AOI into one continuous
+    # GeoTIFF (clipped + composited to EPSG:4326) by reusing the prep-geo merge,
+    # instead of copying the raw tiles. The merged file is written into the
+    # output and recorded as a one-element elevation_files list so the
+    # height_info.json schema and its downstream consumer are unchanged. Fails
+    # loudly when no elevation tile intersects the AOI (or the dir is empty),
+    # forcing the user to supply coverage. Requires -s/--shape for the clip.
     elevation_files = None
     if elevation_data_dir is not None:
-        from terrain_stitcher.functions.ElevationTIFPrep import (
-            main as copy_elevation,
-        )
-
-        elevation_files = copy_elevation(
-            cache_dir, output_dir, elevation_data_dir, shape_file
+        if not shape_file:
+            raise Exception(
+                "--elevationDataDir/-e requires --shape/-s so the AOI can be "
+                "clipped from the elevation GeoTIFFs."
+            )
+        elevation_files = _merge_elevation_into_output(
+            shape_file, elevation_data_dir, output_dir, elevation_padding_deg
         )
 
     # Normalize coordinates to 0-based against the NW-most present tile so

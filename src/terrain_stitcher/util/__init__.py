@@ -1,1 +1,1 @@
-from .files import find_file, find_files_with_extension
+from .files import find_file, find_files_with_extension, write_star_ignore_marker

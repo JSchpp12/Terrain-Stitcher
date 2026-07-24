@@ -30,7 +30,10 @@ from terrain_stitcher.common import (
     World_Bounding_Box,
     World_Coordinates,
 )
-from terrain_stitcher.util import find_files_with_extension
+from terrain_stitcher.util import (
+    find_files_with_extension,
+    write_star_ignore_marker,
+)
 
 log = logging.getLogger(__name__)
 
@@ -378,6 +381,9 @@ def mosaicElevationFiles(
     with rasterio.open(outputPath, "w", **profile) as dst:
         dst.write(out)
 
+    # Pair the created GeoTIFF with an empty .star_ignore_<name> marker so
+    # downstream directory scans can ignore the tif next to its sibling.
+    write_star_ignore_marker(outputPath)
     log.info("Mosaicked %d tile(s) -> %s", len(intersecting), outputPath)
     return outputPath
 

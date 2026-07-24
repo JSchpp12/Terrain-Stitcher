@@ -86,8 +86,10 @@ def addDownloadOrthoArgs(subparser):
         "-e",
         "--elevationDataDir",
         default=None,
-        help="arcgis only: directory of elevation GeoTIFFs to copy into the "
-        "output and record in the manifest (mirrors prep-ortho -e).",
+        help="arcgis only: directory of elevation GeoTIFFs covering the shape "
+        "AOI. They are clipped and composited into one continuous GeoTIFF "
+        "(elevation_merged.tif) in the output and recorded in the manifest, "
+        "mirroring prep-geo. Fails if no tile intersects the AOI.",
     )
     parserGenerate.add_argument(
         "--lod",
@@ -95,6 +97,14 @@ def addDownloadOrthoArgs(subparser):
         default=None,
         help="arcgis only: cache level of detail to stitch. When omitted the "
         "highest LOD with surviving tiles is used.",
+    )
+    parserGenerate.add_argument(
+        "--padding",
+        type=float,
+        default=None,
+        help="arcgis only: degrees of padding around the shape AOI when merging "
+        "elevation GeoTIFFs (-e) into one continuous GeoTIFF (default: 0.1, ~1km "
+        "at mid-latitudes). Mirrors prep-geo --padding.",
     )
 
 
@@ -225,7 +235,12 @@ def main():
         if args.source == "arcgis":
             # The arcgis source folds prep-ortho + stitch-ortho into the
             # import: one pass over the cache produces the final stitched
-            # output + manifest. -d/-f/--resume/-e/--lod are arcgis-only.
+            # output + manifest. -d/-f/--resume/-e/--lod/--padding are arcgis-only.
+            from terrain_stitcher.functions.ElevationGeoPrep import DEFAULT_PADDING_DEG
+
+            elevation_padding = (
+                args.padding if args.padding is not None else DEFAULT_PADDING_DEG
+            )
             main_ortho_arcgis(
                 args.shape,
                 args.input,
@@ -236,6 +251,7 @@ def main():
                 workers=args.workers,
                 elevation_data_dir=args.elevationDataDir,
                 lod=args.lod,
+                elevation_padding_deg=elevation_padding,
             )
         else:
             main_ortho(args.shape, args.output, args.source, args.input, args.workers)
