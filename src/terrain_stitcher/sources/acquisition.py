@@ -26,23 +26,3 @@ class AcquisitionSource(ABC):
         num_workers: int | None = None,
     ) -> None:
         pass
-
-
-def get_acquisition_source(name: str) -> AcquisitionSource:
-    """Factory mapping a source name to its AcquisitionSource implementation."""
-    if name == "usgs":
-        from terrain_stitcher.usgs_acquisition import UsgsAcquisitionSource
-
-        return UsgsAcquisitionSource()
-
-    if name == "arcgis_import":
-        from terrain_stitcher.arcgis.acquisition_source import ArcGisProAcquisitionSource
-
-        return ArcGisProAcquisitionSource()
-
-    # if name == "arcgis_download":
-    #     from terrain_stitcher.arcgis.acquisition_import import ArcGisDownloadAcquisitionSource
-
-    #     return ArcGisDownloadAcquisitionSource()
-
-    raise ValueError(f"Unknown acquisition source: {name}")

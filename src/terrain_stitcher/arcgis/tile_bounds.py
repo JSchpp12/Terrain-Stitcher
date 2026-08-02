@@ -7,9 +7,9 @@ import numpy as np
 import pyproj
 
 from terrain_stitcher.arcgis.cache_xml import ArcGisCacheInfo
-from terrain_stitcher.arcgis.tile_info import BoundedTileInfo, TileInfo
-from terrain_stitcher.common import World_Coordinates
-from terrain_stitcher.sources import Bounds
+from terrain_stitcher.arcgis.tile_info import TileInfo
+from terrain_stitcher.arcgis.bounded_tile_info import BoundedTileInfo
+from terrain_stitcher.common import World_Coordinates, Bounds
 
 
 @dataclass

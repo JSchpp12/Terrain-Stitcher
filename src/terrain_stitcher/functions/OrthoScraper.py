@@ -1,10 +1,10 @@
-﻿from terrain_stitcher.sources.acquisition import get_acquisition_source
+﻿from terrain_stitcher.usgs_acquisition import UsgsAcquisitionSource
 
 
-def main(shapeFile, outputDir, source="usgs", inputDir=None, num_workers=None):
+def main(shapeFile, outputDir, inputDir=None, num_workers=None):
     """Dispatch orthoimagery acquisition to the requested source.
 
     Defaults to the USGS API path to preserve existing behaviour when the
     ``--source`` CLI flag is omitted.
     """
-    get_acquisition_source(source).acquire(shapeFile, outputDir, inputDir, num_workers)
+    UsgsAcquisitionSource().acquire(shapeFile, outputDir, inputDir, num_workers)

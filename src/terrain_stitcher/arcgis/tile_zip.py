@@ -6,8 +6,10 @@ from functools import partial
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from terrain_stitcher.arcgis.tile_info import BoundedTileInfo, TileInfo
-from terrain_stitcher.sources import Bounds, ImageDataWriter
+from terrain_stitcher.arcgis.tile_info import TileInfo
+from terrain_stitcher.arcgis.bounded_tile_info import BoundedTileInfo
+from terrain_stitcher.sources import ImageDataWriter
+from terrain_stitcher.common import Bounds
 
 try:
     from tqdm import tqdm as _tqdm

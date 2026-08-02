@@ -7,6 +7,8 @@ from terrain_stitcher.functions import (
     main_prep_ortho,
     main_prep_elevation,
     main_prep_geo,
+    main_ortho,
+    main_stitch_ortho,
 )
 
 

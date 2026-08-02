@@ -4,7 +4,8 @@ from pathlib import Path
 from terrain_stitcher.arcgis.tile_bounds import TileBoundsCalculator, TileFootprints
 from terrain_stitcher.arcgis.cache_xml import ArcGisCacheInfo, LevelOfDetailInfo
 from terrain_stitcher.arcgis.tile_filter import ShapeTileFilter
-from terrain_stitcher.arcgis.tile_info import BoundedTileInfo, TileInfo
+from terrain_stitcher.arcgis.tile_info import TileInfo
+from terrain_stitcher.arcgis.bounded_tile_info import BoundedTileInfo
 from terrain_stitcher.arcgis.tile_files import gather_tile_files
 from terrain_stitcher.arcgis.tile_zip import process_tile
 import numpy as np
@@ -38,7 +39,7 @@ def _init_worker(
     """
     global _WORKER_CACHE, _WORKER_CALC, _WORKER_FILTER
     global _WORKER_ALL_LAYERS, _WORKER_OUT, _WORKER_EXTRACT_LAT_LON_FROM_PATH
-    
+
     _WORKER_CACHE = cache_info
     _WORKER_CALC = TileBoundsCalculator(cache_info)
     _WORKER_FILTER = (

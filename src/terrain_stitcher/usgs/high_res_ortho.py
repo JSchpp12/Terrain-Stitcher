@@ -7,7 +7,8 @@ from terrain_stitcher.common.tile_overlap import (
     GroupOverlappingChunks,
     SelectRepresentatives,
 )
-from terrain_stitcher.sources import Bounds, ImageDataWriter
+from terrain_stitcher.sources import ImageDataWriter
+from terrain_stitcher.common.bounds import Bounds
 
 
 def get_aerial_photography_datasets(usgs, bounding_box: World_Coordinates):

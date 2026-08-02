@@ -10,7 +10,6 @@ from tqdm import tqdm
 from terrain_stitcher.arcgis.cache_xml import ArcGisCacheInfo, LevelOfDetailInfo
 from terrain_stitcher.arcgis.tile_files import discover_row_dirs, gather_tile_files
 from terrain_stitcher.arcgis.tile_filter import ShapeTileFilter
-from terrain_stitcher.arcgis.tile_info import TileInfo
 from terrain_stitcher.common import ParseArea
 from terrain_stitcher.sources.acquisition import AcquisitionSource
 
@@ -76,9 +75,11 @@ class ArcGisProAcquisitionSource(AcquisitionSource):
     thousand short strings and needs no backpressure.
     """
 
-    def __init__(self, cache_xml_path: Optional[str] = None) -> None:
+    def __init__(self, cache_xml_path: Optional[str] = None, extract_function=None) -> None:
         self._cache_info: Optional[ArcGisCacheInfo] = None
         self.levels: list[LevelOfDetailInfo] = []
+        self.extract_function = extract_function
+
         if cache_xml_path is not None:
             self._load_from_xml(cache_xml_path)
 
@@ -183,7 +184,7 @@ class ArcGisProAcquisitionSource(AcquisitionSource):
         with ProcessPoolExecutor(
             max_workers=num_workers,
             initializer=_init_worker,
-            initargs=(self.cache_info, box, str(all_layers_dir), None, TileInfo.from_paths),
+            initargs=(self.cache_info, box, str(all_layers_dir), None, self.extract_function),
         ) as executor:
             futures = [
                 executor.submit(_discover_row_survivors, row_dir)
@@ -296,7 +297,7 @@ class ArcGisProAcquisitionSource(AcquisitionSource):
             with ProcessPoolExecutor(
                 max_workers=num_workers,
                 initializer=_init_worker,
-                initargs=(self.cache_info, box, str(all_layers_dir), str(out_path), TileInfo.from_paths),
+                initargs=(self.cache_info, box, str(all_layers_dir), str(out_path), self.extract_function),
             ) as executor:
                 futures = [
                     executor.submit(_process_row_worker, row_dir)

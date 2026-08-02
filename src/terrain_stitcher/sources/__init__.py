@@ -1,1 +1,1 @@
-from .contract import DataInfoWriter, ImageDataWriter, Bounds
+from .contract import DataInfoWriter, ImageDataWriter

@@ -8,7 +8,8 @@ from .tile_files import (
     gather_tile_files,
 )
 from .tile_filter import ShapeTileFilter
-from .tile_info import BoundedTileInfo, TileInfo
+from .tile_info import TileInfo
+from .bounded_tile_info import BoundedTileInfo
 from .tile_zip import compress_tile_to_zip, process_tiles, tile_chunk_name, write_tile_sidecar
 from .tile_bounds import TileBoundsCalculator
 
