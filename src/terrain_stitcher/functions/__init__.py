@@ -5,3 +5,4 @@ from .ArcGisImporter import import_from_arcgis as main_ortho_arcgis
 from .ElevationTIFPrep import main as main_prep_elevation
 from .ElevationGeoPrep import main as main_prep_geo
 from .OrthoStitcher import main as main_stitch_ortho
+from .ArcGisDownloader import main as main_arcgis_downloader

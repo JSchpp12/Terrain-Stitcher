@@ -46,11 +46,6 @@ class StitchedGroup:
     origin: tuple[int, int]
     n_tiles: int
 
-
-# Relative touch tolerance. Adapts to USGS vs ArcGIS tile extents.
-_TOUCH_TOL_FACTOR = 1e-3
-
-
 def readManifest(input_dir: str) -> dict:
     """Backward-compatible wrapper returning ``{name: Bounds}`` from one load."""
     return ManifestReader(input_dir).nameToBounds

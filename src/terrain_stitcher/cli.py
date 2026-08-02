@@ -9,6 +9,7 @@ from terrain_stitcher.functions import (
     main_prep_geo,
     main_ortho,
     main_stitch_ortho,
+    main_arcgis_downloader,
 )
 
 
@@ -237,23 +238,27 @@ def main():
             # The arcgis source folds prep-ortho + stitch-ortho into the
             # import: one pass over the cache produces the final stitched
             # output + manifest. -d/-f/--resume/-e/--lod/--padding are arcgis-only.
-            from terrain_stitcher.functions.ElevationGeoPrep import DEFAULT_PADDING_DEG
 
-            elevation_padding = (
-                args.padding if args.padding is not None else DEFAULT_PADDING_DEG
-            )
-            main_ortho_arcgis(
-                args.shape,
-                args.input,
-                args.output,
-                dimension=args.dimension,
-                scale_factor=args.scaleFactor,
-                resume=args.resume,
-                workers=args.workers,
-                elevation_data_dir=args.elevationDataDir,
-                lod=args.lod,
-                elevation_padding_deg=elevation_padding,
-            )
+            if args.input is None:
+                main_arcgis_downloader(args.shape)
+            else:
+                from terrain_stitcher.functions.ElevationGeoPrep import DEFAULT_PADDING_DEG
+
+                elevation_padding = (
+                    args.padding if args.padding is not None else DEFAULT_PADDING_DEG
+                )
+                main_ortho_arcgis(
+                    args.shape,
+                    args.input,
+                    args.output,
+                    dimension=args.dimension,
+                    scale_factor=args.scaleFactor,
+                    resume=args.resume,
+                    workers=args.workers,
+                    elevation_data_dir=args.elevationDataDir,
+                    lod=args.lod,
+                    elevation_padding_deg=elevation_padding,
+                )
         else:
             main_ortho(args.shape, args.output, args.source, args.input, args.workers)
     elif args.command == "prep-ortho":

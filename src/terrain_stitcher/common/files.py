@@ -1,5 +1,6 @@
 import os
 
+
 def get_all_files_in_directory(directory: str) -> list:
     """
     Get all files in a directory with a specific extension.
@@ -16,4 +17,8 @@ def get_all_files_in_directory(directory: str) -> list:
     if not os.path.isdir(directory):
         raise ValueError(f"The provided path '{directory}' is not a valid directory.")
 
-    return [os.path.join(directory, f) for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+    return [
+        os.path.join(directory, f)
+        for f in os.listdir(directory)
+        if os.path.isfile(os.path.join(directory, f))
+    ]

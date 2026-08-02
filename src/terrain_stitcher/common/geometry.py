@@ -9,7 +9,7 @@ from shapely.ops import transform
 from rtree import index
 
 if TYPE_CHECKING:
-    from terrain_stitcher.sources import Bounds
+    from terrain_stitcher.common import Bounds
 
 # Projector for WGS84 -> Web Mercator (meters)
 project = pyproj.Transformer.from_crs(

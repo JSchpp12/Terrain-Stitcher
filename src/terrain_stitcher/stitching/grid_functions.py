@@ -11,6 +11,8 @@ from terrain_stitcher.common import Bounds, World_Coordinates
 from terrain_stitcher.common.tile_overlap import FindOverlappingChunks
 from terrain_stitcher.common.tile import Tile, TileSide
 
+# Relative touch tolerance. Adapts to USGS vs ArcGIS tile extents.
+_TOUCH_TOL_FACTOR = 1e-3
 
 def _open_tile_image(tile: Tile) -> "pImage.Image":
     """Open a tile PNG, re-raising with the tile name and path on failure.
