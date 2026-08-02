@@ -15,8 +15,8 @@ from pathlib import Path
 import pytest
 from PIL import Image as pImage
 
-from terrain_stitcher.functions.OrthoGather import (
-    stitch_arcgis_import,
+from terrain_stitcher.functions.ArcGisImporter import (
+    import_from_arcgis,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "arcgis_cache"
@@ -26,7 +26,7 @@ CONF_XML = FIXTURE / "conf.xml"
 
 def test_stitch_arcgis_import_dimension_one_emits_one_image_per_tile(tmp_path):
     out = tmp_path / "out"
-    groups = stitch_arcgis_import(
+    groups = import_from_arcgis(
         shape_file=None,
         cache_dir=str(FIXTURE),
         output_dir=str(out),
@@ -52,7 +52,7 @@ def test_stitch_arcgis_import_dimension_one_emits_one_image_per_tile(tmp_path):
 
 def test_stitch_arcgis_import_dimension_two_partitions_windows(tmp_path):
     out = tmp_path / "out"
-    groups = stitch_arcgis_import(
+    groups = import_from_arcgis(
         shape_file=None,
         cache_dir=str(FIXTURE),
         output_dir=str(out),
@@ -65,7 +65,7 @@ def test_stitch_arcgis_import_dimension_two_partitions_windows(tmp_path):
 
 def test_stitch_arcgis_import_lod_selects_requested_level(tmp_path):
     out = tmp_path / "out"
-    groups = stitch_arcgis_import(
+    groups = import_from_arcgis(
         shape_file=None,
         cache_dir=str(FIXTURE),
         output_dir=str(out),
@@ -78,7 +78,7 @@ def test_stitch_arcgis_import_lod_selects_requested_level(tmp_path):
 def test_stitch_arcgis_import_lod_missing_raises(tmp_path):
     out = tmp_path / "out"
     with pytest.raises(ValueError, match="No surviving tiles at LOD 99"):
-        stitch_arcgis_import(
+        import_from_arcgis(
             shape_file=None,
             cache_dir=str(FIXTURE),
             output_dir=str(out),
@@ -89,12 +89,12 @@ def test_stitch_arcgis_import_lod_missing_raises(tmp_path):
 
 def test_stitch_arcgis_import_resume_is_idempotent(tmp_path):
     out = tmp_path / "out"
-    stitch_arcgis_import(
+    import_from_arcgis(
         shape_file=None, cache_dir=str(FIXTURE), output_dir=str(out), dimension=1
     )
     first = {p.name: p.stat().st_size for p in out.iterdir() if p.suffix == ".png"}
     # Re-run with resume=True: existing groups are skipped, output unchanged.
-    stitch_arcgis_import(
+    import_from_arcgis(
         shape_file=None,
         cache_dir=str(FIXTURE),
         output_dir=str(out),

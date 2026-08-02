@@ -1164,7 +1164,7 @@ def _merge_elevation_into_output(
     return [os.path.basename(merged_path)]
 
 
-def stitch_arcgis_import(
+def import_from_arcgis(
     shape_file: Optional[str],
     cache_dir: str,
     output_dir: str,
@@ -1219,7 +1219,7 @@ def stitch_arcgis_import(
     from terrain_stitcher.sources.acquisition import get_acquisition_source
     from terrain_stitcher.arcgis.tile_bounds import TileBoundsCalculator
 
-    source = get_acquisition_source("arcgis")
+    source = get_acquisition_source("arcgis_import")
     rows, cols, level_folder, chosen_lod = source.discover_survivors(
         shape_file, cache_dir, num_workers=num_workers, lod=lod
     )

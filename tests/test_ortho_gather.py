@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from terrain_stitcher.functions.OrthoGather import (
+from terrain_stitcher.functions.ArcGisImporter import (
     GatheredTiles,
     Tile,
     buildTileGrid,
@@ -240,7 +240,7 @@ def test_paste_tiles_preserves_alpha(tmp_path):
     assert canvas.getpixel((10, 0)) == (200, 100, 50, 255)
 import json, os
 
-from terrain_stitcher.functions.OrthoGather import main as stitch_main
+from terrain_stitcher.functions.ArcGisImporter import main as stitch_main
 
 
 def test_stitch_passes_through_elevation_tif_sharing_tile_stem(tmp_path):
@@ -401,7 +401,7 @@ def test_stitch_raises_clear_error_on_empty_tile_png(tmp_path):
 def test_open_tile_image_error_names_tile_and_path(tmp_path):
     """_open_tile_image re-raises with the tile name and path so a single bad
     tile in a large stitch is diagnosable."""
-    from terrain_stitcher.functions.OrthoGather import _open_tile_image
+    from terrain_stitcher.functions.ArcGisImporter import _open_tile_image
     from terrain_stitcher.sources import Bounds
     from terrain_stitcher.common import World_Coordinates
 
@@ -493,7 +493,7 @@ def test_resize_tile_small_downscale_uses_plain_lanczos(monkeypatch):
     """scale_factor above the progressive-reduction threshold uses a single
     LANCZOS pass (no reducing_gap) -- sharpest, and no large-ratio aliasing to
     fix."""
-    import terrain_stitcher.functions.OrthoGather as og
+    import terrain_stitcher.functions.ArcGisImporter as og
     from PIL import Image as pImage
 
     calls = []
@@ -511,7 +511,7 @@ def test_resize_tile_large_downscale_uses_progressive_reduction(monkeypatch):
     """scale_factor at/below the threshold uses LANCZOS with reducing_gap, which
     pre-shrinks via area averaging then runs a final LANCZOS pass -- avoids the
     moire a plain LANCZOS produces at big downscale factors and is faster."""
-    import terrain_stitcher.functions.OrthoGather as og
+    import terrain_stitcher.functions.ArcGisImporter as og
     from PIL import Image as pImage
 
     calls = []
@@ -587,7 +587,7 @@ def test_plan_strips_routes_tiny_and_giant_to_whole_group(tmp_path, monkeypatch)
     """_plan_strips returns [] (-> one whole-group pool task) for groups that
     are too small or whose canvas is too big to strip-book, and non-empty for a
     normal big group."""
-    import terrain_stitcher.functions.OrthoGather as og
+    import terrain_stitcher.functions.ArcGisImporter as og
 
     # tiny group (4 tiles < _MIN_TILES_FOR_STRIPS) -> whole-group
     g_small = _group_for_grid(tmp_path, 2)
@@ -609,7 +609,7 @@ def test_plan_strips_routes_tiny_and_giant_to_whole_group(tmp_path, monkeypatch)
 def test_stitch_whole_group_path_matches_reference(tmp_path, monkeypatch):
     """Forcing the whole-group path (canvas allocated in the worker, one pool
     task) still produces output identical to a serial pasteTiles reference."""
-    import terrain_stitcher.functions.OrthoGather as og
+    import terrain_stitcher.functions.ArcGisImporter as og
     from PIL import Image as pImage
 
     n = 9

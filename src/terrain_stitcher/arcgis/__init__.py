@@ -1,4 +1,4 @@
-﻿from .acquisition import ArcGisProAcquisitionSource
+﻿from .acquisition_source import ArcGisProAcquisitionSource
 from .cache_xml import ArcGisCacheInfo, CacheSpatialReference, LevelOfDetailInfo
 from .tile_files import (
     ALL_LAYERS_DIR,

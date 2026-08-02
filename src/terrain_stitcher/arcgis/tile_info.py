@@ -69,6 +69,75 @@ class TileInfo:
         )
 
     @classmethod
+    def from_xyz_path(
+        cls,
+        file_path: "str | Path",
+        tiles_root_dir: "str | Path",
+    ) -> "TileInfo":
+        """Parse a single ``z/x/y.png`` (gdal2tiles / XYZ slippy-map) tile
+        path into a :class:`TileInfo`.
+
+        Unlike :meth:`from_path` (ArcGIS Pro's exploded ``L##/Rhex/Chex.png``
+        cache layout), this expects the standard XYZ layout produced by
+        gdal2tiles: ``<z>/<x>/<y>.png``, decimal, zoom-then-column-then-row.
+        Assumes the same Web Mercator / 256px tile scheme as ArcGIS's default
+        "ArcGIS Online/Bing/Google Maps" cache scheme, so level, row, and
+        column line up directly with layer_number/row_number/col_number.
+        """
+        rel = Path(file_path).relative_to(Path(tiles_root_dir))
+        parts = rel.parts
+        if len(parts) != 3:
+            raise ValueError(
+                f"Expected <z>/<x>/<y>.png relative to tiles_root_dir, got: {rel}"
+            )
+
+        z_part, x_part, y_file = parts
+        y_stem = Path(y_file).stem
+
+        return cls(
+            path=rel,
+            layer_number=int(z_part),
+            row_number=int(y_stem),
+            col_number=int(x_part),
+        )
+
+    @classmethod
+    def from_xyz_paths(
+        cls,
+        file_paths: list,
+        tiles_root_dir: "str | Path",
+    ) -> list["TileInfo"]:
+        """Bulk version of :meth:`from_xyz_path`, mirroring the string-based
+        fast path used in :meth:`from_paths`."""
+        base = os.fspath(tiles_root_dir)
+        prefix = base.rstrip(os.sep) + os.sep
+        infos: list[TileInfo] = []
+
+        for fp in file_paths:
+            fp = os.fspath(fp)
+            rel = (
+                fp[len(prefix) :]
+                if fp.startswith(prefix)
+                else os.path.relpath(fp, base)
+            )
+            parts = rel.split(os.sep)
+            if len(parts) != 3:
+                raise ValueError(
+                    f"Expected <z>/<x>/<y>.png relative to tiles_root_dir, got: {rel}"
+                )
+            z_part, x_part, y_file = parts
+            infos.append(
+                cls(
+                    path=Path(rel),
+                    layer_number=int(z_part),
+                    row_number=int(os.path.splitext(y_file)[0]),
+                    col_number=int(x_part),
+                )
+            )
+
+        return infos
+
+    @classmethod
     def from_paths(
         cls,
         file_paths: list,

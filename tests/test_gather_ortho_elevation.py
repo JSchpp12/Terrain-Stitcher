@@ -18,9 +18,9 @@ import pytest
 import rasterio
 from rasterio.transform import from_origin
 
-from terrain_stitcher.functions.OrthoGather import (
+from terrain_stitcher.functions.ArcGisImporter import (
     _merge_elevation_into_output,
-    stitch_arcgis_import,
+    import_from_arcgis,
 )
 from terrain_stitcher.util import write_star_ignore_marker
 
@@ -67,7 +67,7 @@ def test_gather_ortho_elevation_merges_into_single_tif(tmp_path):
     elev_dir = _write_perryville_elevation(tmp_path / "elevation")
     out = tmp_path / "out"
 
-    groups = stitch_arcgis_import(
+    groups = import_from_arcgis(
         shape_file=str(SHAPE_JSON),
         cache_dir=str(FIXTURE),
         output_dir=str(out),
@@ -102,7 +102,7 @@ def test_gather_ortho_elevation_merges_into_single_tif(tmp_path):
     assert _sample(out / "elevation_merged.tif", -159.25, 56.00) == pytest.approx(200.0, abs=0.01)
 
     # the created GeoTIFF is paired with an empty .star_ignore_<name> marker
-    marker = out / ".star_ignore_elevation_merged.tif"
+    marker = out / ".star_ignore_elevation_merged"
     assert marker.is_file()
     assert marker.stat().st_size == 0
 
@@ -111,7 +111,7 @@ def test_gather_ortho_elevation_requires_shape(tmp_path):
     elev_dir = _write_perryville_elevation(tmp_path / "elevation")
     out = tmp_path / "out"
     with pytest.raises(Exception, match="requires --shape/-s"):
-        stitch_arcgis_import(
+        import_from_arcgis(
             shape_file=None,
             cache_dir=str(FIXTURE),
             output_dir=str(out),
@@ -146,11 +146,11 @@ def test_write_star_ignore_marker_creates_empty_dotfile(tmp_path):
     geotiff.parent.mkdir(parents=True)
     geotiff.write_bytes(b"FAKE")
     marker = write_star_ignore_marker(str(geotiff))
-    assert os.path.basename(marker) == ".star_ignore_elevation_merged.tif"
+    assert os.path.basename(marker) == ".star_ignore_elevation_merged"
     assert os.path.dirname(marker) == str(geotiff.parent)
     assert os.path.isfile(marker)
     assert os.path.getsize(marker) == 0
     # idempotent: re-running truncates rather than failing
-    (geotiff.parent / ".star_ignore_elevation_merged.tif").write_text("x")
+    (geotiff.parent / ".star_ignore_elevation_merged").write_text("x")
     write_star_ignore_marker(str(geotiff))
     assert os.path.getsize(marker) == 0

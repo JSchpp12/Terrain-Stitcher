@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from terrain_stitcher.arcgis.acquisition import ArcGisProAcquisitionSource
+from terrain_stitcher.arcgis.acquisition_import import ArcGisProAcquisitionSource
 from terrain_stitcher.arcgis.cache_xml import (
     ArcGisCacheInfo,
     CacheSpatialReference,

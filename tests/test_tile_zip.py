@@ -174,7 +174,7 @@ def test_process_tiles_empty(tmp_path):
 
 
 def test_acquire_writes_zips_and_sidecars(tmp_path):
-    from terrain_stitcher.arcgis.acquisition import ArcGisProAcquisitionSource
+    from terrain_stitcher.arcgis.acquisition_import import ArcGisProAcquisitionSource
 
     src = ArcGisProAcquisitionSource.from_cache_dir(str(FIXTURE_DIR))
     out = tmp_path / "out"
