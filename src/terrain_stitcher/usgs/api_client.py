@@ -7,6 +7,7 @@ from terrain_stitcher.common import World_Bounding_Box
 
 SERVICE_URL = "https://m2m.cr.usgs.gov/api/api/json/stable/"
 
+
 class Client:
     def Send_Request(endpoint, data, apiKey=None):
         url = SERVICE_URL + endpoint
@@ -51,12 +52,12 @@ class Client:
 
         return output["data"]
 
-    def submitRequest(self, endpoint, data): 
-        if self.api_key is None: 
+    def submitRequest(self, endpoint, data):
+        if self.api_key is None:
             raise Exception("Session not valid")
-        
+
         return Client.Send_Request(endpoint, data, self.api_key)
-    
+
     def Authorize_Login():
         payload = {"username": USGS_USERNAME, "token": USGS_APPLICATION_KEY}
         endpoint = "login-token"
@@ -135,7 +136,9 @@ class Client:
         datasets = Client.Send_Request("dataset-search", payload, self.api_key)
         return datasets
 
-    def find_scenes(self, dataset, bounding_box: World_Bounding_Box, acquisition_filter = None):
+    def find_scenes(
+        self, dataset, bounding_box: World_Bounding_Box, acquisition_filter=None
+    ):
         spatial_filter = {
             "filterType": "mbr",
             "lowerLeft": {
@@ -149,14 +152,10 @@ class Client:
         }
 
         name = dataset["datasetAlias"]
-        sceneFilter =  {"spatialFilter": spatial_filter}
-        if acquisition_filter is not None: 
+        sceneFilter = {"spatialFilter": spatial_filter}
+        if acquisition_filter is not None:
             sceneFilter["acquisitionFilter"] = acquisition_filter
-        payload = {
-            "datasetName": name,
-            "maxResults": 3000,
-            "sceneFilter":sceneFilter
-        }
+        payload = {"datasetName": name, "maxResults": 3000, "sceneFilter": sceneFilter}
 
         scenes = Client.Send_Request("scene-search", payload, self.api_key)
 
