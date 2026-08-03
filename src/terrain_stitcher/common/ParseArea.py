@@ -5,56 +5,93 @@ from .TerrainArea import World_Bounding_Box, World_Coordinates
 
 from enum import Enum
 
-#enum definition of the type of center used to calculate bounds of terrains 
-class TerrainBoundsCalculateType(Enum): 
+
+# enum definition of the type of center used to calculate bounds of terrains
+class TerrainBoundsCalculateType(Enum):
     POINT = "1"
 
-def terrainBoundsTypeToString(type : TerrainBoundsCalculateType) -> str:
-    if (type == TerrainBoundsCalculateType.POINT): 
+
+def terrainBoundsTypeToString(type: TerrainBoundsCalculateType) -> str:
+    if type == TerrainBoundsCalculateType.POINT:
         return "POINT"
 
-def nameToTerrainBoundsType(name : str) -> TerrainBoundsCalculateType: 
-    if (name == "POINT"): 
+
+def nameToTerrainBoundsType(name: str) -> TerrainBoundsCalculateType:
+    if name == "POINT":
         return TerrainBoundsCalculateType.POINT
-    
-def calculate_bounding_box_around_point(center : World_Coordinates, radius_miles : int = 10) -> World_Bounding_Box:
+
+    raise Exception(f"Unknown TerrainBoundsCalculateType name: {name}")
+
+
+def calculate_bounding_box_around_point(
+    center: World_Coordinates, radius_miles: float = 10.0
+) -> World_Bounding_Box:
     # Extract latitude and longitude
     lat = center.get_lat()
     lon = center.get_lon()
-    
+    radius_miles = float(radius_miles)
+
     # Convert miles to degrees
     lat_offset = radius_miles / 69.0
     lon_offset = radius_miles / (69.0 * math.cos(math.radians(lat)))
-    
+
     # Calculate bounding box
     min_lat = lat - lat_offset
     max_lat = lat + lat_offset
     min_lon = lon - lon_offset
     max_lon = lon + lon_offset
 
-    return World_Bounding_Box(World_Coordinates(min_lat, min_lon), World_Coordinates(max_lat, max_lon))
+    return World_Bounding_Box(
+        World_Coordinates(min_lat, min_lon), World_Coordinates(max_lat, max_lon)
+    )
 
-class ParseArea: 
-    def __init__(self, boundsType : TerrainBoundsCalculateType, center) -> None: 
+
+class ParseArea:
+    def __init__(
+        self, boundsType: TerrainBoundsCalculateType, center: World_Coordinates, view_distance=None
+    ) -> None:
         self.boundsType = boundsType
         self.center = center
+        # Radius (in miles) used to calculate the bounding box around the
+        # center point. Defaults to 10 to preserve historical behavior.
+        # Coerced to float so the serialized JSON value is always a float.
+        self.view_distance = float(view_distance) if view_distance is not None else 10.0
 
     @classmethod
-    def fromJSONFile(cls, filePath): 
-        with open(filePath, 'r') as file:
+    def fromJSONFile(cls, filePath):
+        with open(filePath, "r") as file:
             jData = json.load(file)
-            bounds = nameToTerrainBoundsType(jData['boundsType'])
-            return cls(bounds, World_Coordinates.fromDict(jData['center']))
-        
-    def toJSON(self) -> dict: 
+            bounds = nameToTerrainBoundsType(jData["boundsType"])
+            view_distance = jData.get("view_distance", jData.get("range", 10.0))
+            center = jData["center"]
+            # Shape.json stores the center using "x"/"y" keys (x = longitude,
+            # y = latitude) with numeric values. The legacy "lat"/"lon" format
+            # is still accepted so existing Shape.json files keep working.
+            if "x" in center and "y" in center:
+                coords = World_Coordinates(lat=center["y"], lon=center["x"])
+            else:
+                coords = World_Coordinates.fromDict(center)
+            return cls(bounds, coords, view_distance)
+
+    def toJSON(self) -> dict:
+        # The center is written with both the new "x"/"y" keys and the
+        # legacy "lat"/"lon" keys so existing Shape.json consumers keep
+        # working. "x" mirrors the longitude and "y" mirrors the latitude
+        # and are emitted as floats; "lat"/"lon" retain their original
+        # (string) values for backwards compatibility.
         return {
-            'boundsType': terrainBoundsTypeToString(self.boundsType),
-            'center': self.center.toJSON()
+            "boundsType": terrainBoundsTypeToString(self.boundsType),
+            "center": {
+                "lat": self.center.lat,
+                "lon": self.center.lon,
+                "x": self.center.get_lon(),
+                "y": self.center.get_lat(),
+            },
+            "view_distance": self.view_distance,
         }
-    
-    def getTotalRegion(self) -> World_Bounding_Box: 
-        if self.boundsType is TerrainBoundsCalculateType.POINT: 
-            return calculate_bounding_box_around_point(self.center, 10)
+
+    def getTotalRegion(self) -> World_Bounding_Box:
+        if self.boundsType is TerrainBoundsCalculateType.POINT:
+            return calculate_bounding_box_around_point(self.center, self.view_distance)
         else:
             raise Exception("Unhandled boundsType declaration")
-    

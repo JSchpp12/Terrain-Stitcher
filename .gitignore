@@ -2,8 +2,11 @@ __pycache__
 result/
 terrains/
 data/
+media/
 src/tmpDownloads/
 .env
+.vscode/
 *.egg-info
 *.zip
 *.txt
+.pytest_cache/
