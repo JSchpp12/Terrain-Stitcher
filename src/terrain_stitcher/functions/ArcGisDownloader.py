@@ -144,14 +144,42 @@ def fetch_chunk(
     )
 
 
-def georeference_chunk(
-    raw_bytes: bytes, chunk: dict, img_format: str, tmp_dir: Path
-) -> Path:
-    ext = "tif" if img_format == "tiff" else img_format
-    raw_path = tmp_dir / f"raw_{chunk['col']}_{chunk['row']}.{ext}"
-    raw_path.write_bytes(raw_bytes)
+def _georeference_inprocess(raw_path: Path, out_path: Path, chunk: dict) -> Path:
+    """Georeference a raw image using the GDAL Python bindings.
 
-    out_path = tmp_dir / f"chunk_{chunk['col']}_{chunk['row']}.tif"
+    Equivalent to ``gdal_translate -a_srs EPSG:{SRS} -a_ullr ...`` but runs
+    in-process, avoiding the ~30-50 ms per-call subprocess-spawn overhead on
+    Windows that dominates the cost for small chunks.
+    """
+    from osgeo import gdal
+
+    options = gdal.TranslateOptions(
+        [
+            "-a_srs",
+            f"EPSG:{SRS}",
+            "-a_ullr",
+            str(chunk["xmin"]),
+            str(chunk["ymax"]),
+            str(chunk["xmax"]),
+            str(chunk["ymin"]),
+        ],
+        format="GTiff",
+    )
+    ds = gdal.Translate(str(out_path), str(raw_path), options=options)
+    if ds is None:
+        raise RuntimeError(
+            f"gdal.Translate failed for {raw_path} "
+            f"(chunk {chunk['col']},{chunk['row']})"
+        )
+    ds = None  # close the output dataset
+    return out_path
+
+
+def _georeference_subprocess(raw_path: Path, out_path: Path, chunk: dict) -> Path:
+    """Georeference a raw image by shelling out to ``gdal_translate``.
+
+    Fallback used when the GDAL Python bindings are not importable.
+    """
     subprocess.run(
         [
             "gdal_translate",
@@ -169,7 +197,23 @@ def georeference_chunk(
         capture_output=True,
         text=True,
     )
-    raw_path.unlink(missing_ok=True)
+    return out_path
+
+
+def georeference_chunk(
+    raw_bytes: bytes, chunk: dict, img_format: str, tmp_dir: Path
+) -> Path:
+    ext = "tif" if img_format == "tiff" else img_format
+    raw_path = tmp_dir / f"raw_{chunk['col']}_{chunk['row']}.{ext}"
+    raw_path.write_bytes(raw_bytes)
+
+    out_path = tmp_dir / f"chunk_{chunk['col']}_{chunk['row']}.tif"
+    try:
+        _georeference_inprocess(raw_path, out_path, chunk)
+    except ImportError:
+        _georeference_subprocess(raw_path, out_path, chunk)
+    finally:
+        raw_path.unlink(missing_ok=True)
     return out_path
 
 
@@ -321,19 +365,33 @@ def download_all_chunks(
 
     if cached:
         corrupt: list[tuple[dict, str, Path]] = []
-        with tqdm(total=len(cached), desc="Verifying cached chunks") as pbar:
-            for chunk, key, cached_path in cached:
-                if _verify_chunk(cached_path):
-                    chunk_paths.append(cached_path)
-                else:
-                    pbar.write(
-                        f"Chunk ({chunk['col']},{chunk['row']}) failed "
-                        f"verification -- will re-download."
-                    )
-                    cached_path.unlink(missing_ok=True)
-                    manifest[key] = {"status": "failed", "file": None}
-                    corrupt.append((chunk, key, cached_path))
-                pbar.update(1)
+        with ThreadPoolExecutor(max_workers=workers) as verify_pool:
+            futures = {
+                verify_pool.submit(_verify_chunk, cached_path): (
+                    chunk,
+                    key,
+                    cached_path,
+                )
+                for chunk, key, cached_path in cached
+            }
+            with tqdm(total=len(cached), desc="Verifying cached chunks") as pbar:
+                for future in as_completed(futures):
+                    chunk, key, cached_path = futures[future]
+                    try:
+                        ok = future.result()
+                    except Exception:
+                        ok = False
+                    if ok:
+                        chunk_paths.append(cached_path)
+                    else:
+                        pbar.write(
+                            f"Chunk ({chunk['col']},{chunk['row']}) failed "
+                            f"verification -- will re-download."
+                        )
+                        cached_path.unlink(missing_ok=True)
+                        manifest[key] = {"status": "failed", "file": None}
+                        corrupt.append((chunk, key, cached_path))
+                    pbar.update(1)
         if corrupt:
             to_download.extend(c[0] for c in corrupt)
             print(
