@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import time
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from tqdm import tqdm
@@ -172,39 +173,219 @@ def georeference_chunk(
     return out_path
 
 
+MANIFEST_FILENAME = "manifest.json"
+
+
+def _chunk_key(chunk: dict) -> str:
+    return f"{chunk['row']}_{chunk['col']}"
+
+
+def _load_manifest(tmp_dir: Path) -> dict:
+    """Load an existing chunk manifest from *tmp_dir*, or return an empty
+    manifest if none exists.  The manifest maps ``"row_col"`` keys to
+    ``{"status": "downloaded"|"failed", "file": str|None}``."""
+    manifest_path = tmp_dir / MANIFEST_FILENAME
+    if manifest_path.is_file():
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            print("Warning: manifest.json was corrupt -- ignoring it.")
+    return {}
+
+
+def _save_manifest(tmp_dir: Path, manifest: dict) -> None:
+    manifest_path = tmp_dir / MANIFEST_FILENAME
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2)
+
+
+def _recover_manifest_from_disk(tmp_dir: Path) -> dict:
+    """Build a manifest from chunk GeoTIFFs left on disk by an interrupted
+    run (one where ``manifest.json`` was never written).
+
+    Scans *tmp_dir* for files named ``chunk_{col}_{row}.tif``, parses the
+    col/row from each filename, and returns a manifest dict with those chunks
+    marked as ``"downloaded"``.
+    """
+    manifest: dict[str, dict] = {}
+    for chunk_file in tmp_dir.glob("chunk_*.tif"):
+        # filename is chunk_{col}_{row}.tif
+        stem = chunk_file.stem  # "chunk_0_3"
+        parts = stem.split("_")
+        if len(parts) != 3 or parts[0] != "chunk":
+            continue
+        try:
+            col = int(parts[1])
+            row = int(parts[2])
+        except ValueError:
+            continue
+        key = f"{row}_{col}"
+        manifest[key] = {"status": "downloaded", "file": chunk_file.name}
+    return manifest
+
+
+def _verify_chunk(path: Path) -> bool:
+    """Return True if *path* is a readable raster with valid pixel data.
+
+    Tries, in order, the GDAL Python bindings (most thorough -- reads all
+    pixel data via ``Checksum``), the ``gdalinfo`` command-line tool, and
+    finally a basic TIFF header + minimum size sanity check.
+    """
+    # 1. GDAL Python bindings -- forces a full read of every band
+    try:
+        from osgeo import gdal
+
+        ds = gdal.OpenEx(str(path), gdal.OF_RASTER | gdal.OF_READONLY)
+        if ds is None:
+            return False
+        if ds.RasterXSize <= 0 or ds.RasterYSize <= 0 or ds.RasterCount < 1:
+            ds = None
+            return False
+        try:
+            for i in range(1, ds.RasterCount + 1):
+                ds.GetRasterBand(i).Checksum()
+        except Exception:
+            ds = None
+            return False
+        ds = None
+        return True
+    except ImportError:
+        pass
+
+    # 2. gdalinfo command-line tool
+    gdalinfo = shutil.which("gdalinfo")
+    if gdalinfo:
+        result = subprocess.run(
+            [gdalinfo, "-checksum", str(path)],
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+
+    # 3. Basic TIFF header + minimum size sanity check
+    try:
+        import struct
+
+        with open(path, "rb") as fh:
+            header = fh.read(4)
+        if header[:2] not in (b"II", b"MM"):
+            return False
+        endian = "<" if header[:2] == b"II" else ">"
+        magic = struct.unpack(endian + "H", header[2:4])[0]
+        if magic != 42:
+            return False
+        return path.stat().st_size > 1024
+    except (OSError, struct.error):
+        return False
+
+
 def download_all_chunks(
     chunks, img_format, max_retries, timeout, workers, tmp_dir: Path
-):
-    chunk_paths = []
-    failed = []
+) -> tuple[list[Path], list[dict]]:
+    """Download *chunks* into *tmp_dir*, skipping any that already appear as
+    downloaded in a previous run's manifest (and whose GeoTIFF still exists).
+
+    Returns ``(chunk_paths, failed)`` where *chunk_paths* are the GeoTIFFs of
+    every successfully fetched chunk (reused + freshly downloaded) and
+    *failed* is the list of chunks that could not be fetched.
+    """
+    manifest = _load_manifest(tmp_dir)
+
+    if not manifest:
+        recovered = _recover_manifest_from_disk(tmp_dir)
+        if recovered:
+            print(
+                f"No manifest found but {len(recovered)} chunk file(s) exist "
+                f"on disk from a previous interrupted run -- recovering."
+            )
+            manifest = recovered
+
+    chunk_paths: list[Path] = []
+    failed: list[dict] = []
+    to_download: list[dict] = []
+
+    # Collect chunks the manifest says are already downloaded so we can
+    # verify them before reusing -- a truncated/corrupt file (e.g. from an
+    # interrupted write) must be re-fetched, not silently used.
+    cached: list[tuple[dict, str, Path]] = []
+    for chunk in chunks:
+        key = _chunk_key(chunk)
+        entry = manifest.get(key)
+        if entry and entry.get("status") == "downloaded":
+            cached_path = tmp_dir / entry["file"]
+            if cached_path.is_file():
+                cached.append((chunk, key, cached_path))
+                continue
+        to_download.append(chunk)
+
+    if cached:
+        corrupt: list[tuple[dict, str, Path]] = []
+        with tqdm(total=len(cached), desc="Verifying cached chunks") as pbar:
+            for chunk, key, cached_path in cached:
+                if _verify_chunk(cached_path):
+                    chunk_paths.append(cached_path)
+                else:
+                    pbar.write(
+                        f"Chunk ({chunk['col']},{chunk['row']}) failed "
+                        f"verification -- will re-download."
+                    )
+                    cached_path.unlink(missing_ok=True)
+                    manifest[key] = {"status": "failed", "file": None}
+                    corrupt.append((chunk, key, cached_path))
+                pbar.update(1)
+        if corrupt:
+            to_download.extend(c[0] for c in corrupt)
+            print(
+                f"{len(cached) - len(corrupt)} chunk(s) verified, "
+                f"{len(corrupt)} corrupt and will be re-downloaded."
+            )
+        else:
+            print(f"{len(cached)} chunk(s) verified OK.")
+
+    if to_download:
+        print(
+            f"{len(chunk_paths)} chunk(s) already downloaded; "
+            f"fetching {len(to_download)} remaining chunk(s)..."
+        )
+    elif chunk_paths:
+        print("All chunks already downloaded -- skipping fetch.")
+    else:
+        print(f"Downloading {len(chunks)} chunks with {workers} workers...")
 
     with requests.Session() as session, ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
             pool.submit(fetch_chunk, session, c, img_format, max_retries, timeout): c
-            for c in chunks
+            for c in to_download
         }
 
-        with tqdm(total=len(chunks), desc="Downloading chunks") as pbar:
+        with tqdm(total=len(to_download), desc="Downloading chunks") as pbar:
             for future in as_completed(futures):
                 chunk = futures[future]
+                key = _chunk_key(chunk)
                 try:
                     raw_bytes = future.result()
                     path = georeference_chunk(raw_bytes, chunk, img_format, tmp_dir)
                     chunk_paths.append(path)
+                    manifest[key] = {"status": "downloaded", "file": path.name}
                     pbar.set_postfix_str(f"Chunk ({chunk['col']},{chunk['row']}) OK")
                 except Exception as e:
                     failed.append(chunk)
+                    manifest[key] = {"status": "failed", "file": None}
                     pbar.set_postfix_str(
                         f"Chunk ({chunk['col']},{chunk['row']}) FAILED: {e}"
                     )
                 finally:
                     pbar.update(1)
+
+    _save_manifest(tmp_dir, manifest)
+
     if failed:
         print(
             f"\n{len(failed)} chunk(s) failed after all retries. "
-            f"Consider re-running with more retries or fewer workers."
+            f"Re-run the command to retry only the failed chunks."
         )
-    return chunk_paths
+    return chunk_paths, failed
 
 
 def build_mosaic(chunk_paths, tmp_dir: Path) -> Path:
@@ -291,7 +472,9 @@ def download_from_arcgis(
     chunks = build_chunk_grid(xmin, ymin, xmax, ymax, chunk_px, pixel_size_m)
 
     print(f"Downloading {len(chunks)} chunks with {num_workers} workers...")
-    chunk_paths = download_all_chunks(chunks, "png", 5, timeout, num_workers, tmp_dir)
+    chunk_paths, failed = download_all_chunks(
+        chunks, "png", 5, timeout, num_workers, tmp_dir
+    )
 
     if not chunk_paths:
         print("No chunks downloaded successfully - aborting.")
@@ -303,10 +486,21 @@ def download_from_arcgis(
     print(f"Tiling (zoom {zoom})...")
     run_gdal2tiles(mosaic_path, outdir, zoom, xyz, resampling, processes, "none")
 
-    # delete temporary files
-    shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    print(f"Done. Tiles written to: {outdir} ({'XYZ' if xyz else 'TMS'} numbering)")
+    if failed:
+        print(
+            f"\nCompleted with {len(failed)} failed chunk(s). "
+            f"Tiles written to: {outdir} ({'XYZ' if xyz else 'TMS'} numbering), "
+            f"but gaps exist where chunks failed.\n"
+            f"Temporary chunk files kept in {tmp_dir} -- re-run the same "
+            f"command to retry only the {len(failed)} failed chunk(s)."
+        )
+    else:
+        # all chunks succeeded -- safe to clean up temporary files
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        print(
+            f"Done. Tiles written to: {outdir} "
+            f"({'XYZ' if xyz else 'TMS'} numbering)"
+        )
 
 
 def main(
