@@ -2,12 +2,12 @@ from typing import List, Optional
 from collections.abc import Callable
 from pathlib import Path
 from terrain_stitcher.arcgis.tile_bounds import TileBoundsCalculator, TileFootprints
-from terrain_stitcher.arcgis.cache_xml import ArcGisCacheInfo, LevelOfDetailInfo
 from terrain_stitcher.arcgis.tile_filter import ShapeTileFilter
 from terrain_stitcher.arcgis.tile_info import TileInfo
 from terrain_stitcher.arcgis.bounded_tile_info import BoundedTileInfo
 from terrain_stitcher.arcgis.tile_files import gather_tile_files
 from terrain_stitcher.arcgis.tile_zip import process_tile
+from terrain_stitcher.arcgis.tile_scheme import TileSchemeInfo
 import numpy as np
 
 # --- worker-process state --------------------------------------------------
@@ -17,19 +17,20 @@ import numpy as np
 # just a directory-path string -- no per-tile or per-row Bounds data crosses the
 # process boundary, and the (non-picklable) pyproj Transformer is built inside
 # each worker rather than pickled across it.
-_WORKER_CACHE: Optional[ArcGisCacheInfo] = None
+_WORKER_CACHE: Optional[TileSchemeInfo] = None
 _WORKER_CALC: Optional[TileBoundsCalculator] = None
 _WORKER_FILTER: Optional[ShapeTileFilter] = None
 _WORKER_ALL_LAYERS: Optional[str] = None
 _WORKER_OUT: Optional[str] = None
 _WORKER_EXTRACT_LAT_LON_FROM_PATH: Optional[Callable] = None
 
+
 def _init_worker(
-    cache_info: ArcGisCacheInfo,
+    cache_info: TileSchemeInfo,
     box: Optional[tuple],
     all_layers_dir: str,
     output_dir: str,
-    extract_lat_lon_from_path_function : Callable
+    extract_lat_lon_from_path_function: Callable,
 ) -> None:
     """Per-worker one-time setup, run by the pool's ``initializer``.
 
@@ -51,7 +52,9 @@ def _init_worker(
 
 
 def _process_tiles(tile_paths: list[str]) -> tuple[int, int, int]:
-    tile_infos: List[TileInfo] = _WORKER_EXTRACT_LAT_LON_FROM_PATH(tile_paths, _WORKER_ALL_LAYERS)
+    tile_infos: List[TileInfo] = _WORKER_EXTRACT_LAT_LON_FROM_PATH(
+        tile_paths, _WORKER_ALL_LAYERS
+    )
     discovered = len(tile_infos)
     footprints = None
     if _WORKER_CALC is not None:
@@ -91,6 +94,7 @@ def _process_tiles(tile_paths: list[str]) -> tuple[int, int, int]:
 
     return (discovered, len(bounded_tiles), filtered_out)
 
+
 def _discover_row_survivors(row_dir: str) -> tuple[str, np.ndarray, np.ndarray]:
     """Discover surviving tile coordinates for one row dir, no bounds work.
 
@@ -112,7 +116,9 @@ def _discover_row_survivors(row_dir: str) -> tuple[str, np.ndarray, np.ndarray]:
     tile_paths = gather_tile_files(row_dir, _WORKER_CACHE.cache_tile_format)
     if not tile_paths:
         return level_folder, np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
-    tile_infos: List[TileInfo] = _WORKER_EXTRACT_LAT_LON_FROM_PATH(tile_paths, _WORKER_ALL_LAYERS)
+    tile_infos: List[TileInfo] = _WORKER_EXTRACT_LAT_LON_FROM_PATH(
+        tile_paths, _WORKER_ALL_LAYERS
+    )
     if _WORKER_CALC is None:
         raise Exception("Worker calculation for bounding box was never assigned")
     footprints = _WORKER_CALC.projected_footprints(tile_infos)

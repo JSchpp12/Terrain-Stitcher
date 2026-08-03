@@ -29,6 +29,12 @@ WGS84_TO_WEBMERC = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True
 TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
+def pixel_size_for_zoom(zoom: int) -> float:
+    # standard web mercator resolution at zoom z, at the equator
+    earth_circumference_m = 2 * math.pi * 6378137.0
+    return earth_circumference_m / (256 * 2**zoom)
+
+
 def bbox_from_radius(lat: float, lon: float, radius_miles: float):
     """Bounding box (xmin, ymin, xmax, ymax) in EPSG:3857 meters corresponding
     to a real-world radius in miles around lat/lon."""
@@ -47,11 +53,11 @@ def bbox_from_radius(lat: float, lon: float, radius_miles: float):
     return xmin, ymin, xmax, ymax
 
 
-def build_chunk_grid(xmin, ymin, xmax, ymax, chunk_px: int):
+def build_chunk_grid(xmin, ymin, xmax, ymax, chunk_px: int, pixel_size_m: float):
     """Return a list of chunk dicts covering the AOI, each with pixel
-    dimensions and a projected bbox, sized at the service's native resolution."""
-    total_w_px = max(1, round((xmax - xmin) / NATIVE_PIXEL_SIZE_M))
-    total_h_px = max(1, round((ymax - ymin) / NATIVE_PIXEL_SIZE_M))
+    dimensions and a projected bbox, sized at `pixel_size_m` resolution."""
+    total_w_px = max(1, round((xmax - xmin) / pixel_size_m))
+    total_h_px = max(1, round((ymax - ymin) / pixel_size_m))
 
     n_cols = math.ceil(total_w_px / chunk_px)
     n_rows = math.ceil(total_h_px / chunk_px)
@@ -60,14 +66,14 @@ def build_chunk_grid(xmin, ymin, xmax, ymax, chunk_px: int):
     for row in range(n_rows):
         y_off = row * chunk_px
         h = min(chunk_px, total_h_px - y_off)
-        chunk_ymax = ymax - y_off * NATIVE_PIXEL_SIZE_M
-        chunk_ymin = chunk_ymax - h * NATIVE_PIXEL_SIZE_M
+        chunk_ymax = ymax - y_off * pixel_size_m
+        chunk_ymin = chunk_ymax - h * pixel_size_m
 
         for col in range(n_cols):
             x_off = col * chunk_px
             w = min(chunk_px, total_w_px - x_off)
-            chunk_xmin = xmin + x_off * NATIVE_PIXEL_SIZE_M
-            chunk_xmax = chunk_xmin + w * NATIVE_PIXEL_SIZE_M
+            chunk_xmin = xmin + x_off * pixel_size_m
+            chunk_xmax = chunk_xmin + w * pixel_size_m
 
             chunks.append(
                 {
@@ -83,8 +89,8 @@ def build_chunk_grid(xmin, ymin, xmax, ymax, chunk_px: int):
             )
 
     print(
-        f"Total raster: {total_w_px} x {total_h_px} px -> {len(chunks)} chunks "
-        f"({n_cols} cols x {n_rows} rows, {chunk_px}px each)"
+        f"Total raster: {total_w_px} x {total_h_px} px @ {pixel_size_m:.3f} m/px "
+        f"-> {len(chunks)} chunks ({n_cols} cols x {n_rows} rows, {chunk_px}px each)"
     )
     return chunks
 
@@ -217,7 +223,7 @@ def build_mosaic(chunk_paths, tmp_dir: Path) -> Path:
 def run_gdal2tiles(
     raster_path: Path,
     outdir: str,
-    zoom: str,
+    lod: str,
     xyz: bool,
     resampling: str,
     processes: int,
@@ -225,7 +231,7 @@ def run_gdal2tiles(
 ):
     base_args = [
         "-z",
-        zoom,
+        str(lod),
         "-w",
         webviewer,
         "-r",
@@ -280,10 +286,12 @@ def download_from_arcgis(
     tmp_dir = Path("aoi_chunks")
     tmp_dir.mkdir(exist_ok=True)
 
-    chunks = build_chunk_grid(xmin, ymin, xmax, ymax, chunk_px)
+    pixel_size_m = max(NATIVE_PIXEL_SIZE_M, pixel_size_for_zoom(zoom))
+
+    chunks = build_chunk_grid(xmin, ymin, xmax, ymax, chunk_px, pixel_size_m)
 
     print(f"Downloading {len(chunks)} chunks with {num_workers} workers...")
-    chunk_paths = download_all_chunks(chunks, "tiff", 5, timeout, num_workers, tmp_dir)
+    chunk_paths = download_all_chunks(chunks, "png", 5, timeout, num_workers, tmp_dir)
 
     if not chunk_paths:
         print("No chunks downloaded successfully - aborting.")
@@ -301,15 +309,25 @@ def download_from_arcgis(
     print(f"Done. Tiles written to: {outdir} ({'XYZ' if xyz else 'TMS'} numbering)")
 
 
-def main(shape_file):
+def main(
+    shape_file,
+    lod: int,
+    outdir="output_tiles",
+    xyz: bool = True,
+    resampling: str = "lanczos",
+    processes: int = 32,
+    timeout: int = 30,
+    num_workers: int = 32,
+    chunk_px: int = 256,
+):
     download_from_arcgis(
         shapefile_path=shape_file,
-        outdir="output_tiles",
-        zoom="17",
-        xyz=False,
-        resampling="lanczos",
-        processes=16,
-        timeout=30,
-        num_workers=16,
-        chunk_px=256,
+        outdir=outdir,
+        zoom=lod,
+        xyz=xyz,
+        resampling=resampling,
+        processes=processes,
+        timeout=timeout,
+        num_workers=num_workers,
+        chunk_px=chunk_px,
     )

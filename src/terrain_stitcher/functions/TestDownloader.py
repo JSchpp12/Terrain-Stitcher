@@ -66,6 +66,43 @@ def main():
     parser.add_argument("--keep-temp", action="store_true")
     args = parser.parse_args()
 
+    xmin, ymin, xmax, ymax = bbox_from_radius(args.lat, args.lon, args.radius_miles)
+    print(f"AOI bbox (EPSG:3857): {xmin:.1f}, {ymin:.1f}, {xmax:.1f}, {ymax:.1f}")
+
+    tmp_dir = Path("aoi_chunks")
+    tmp_dir.mkdir(exist_ok=True)
+
+    chunks = build_chunk_grid(xmin, ymin, xmax, ymax, args.chunk_px)
+
+    print(f"Downloading {len(chunks)} chunks with {args.workers} workers...")
+    chunk_paths = download_all_chunks(
+        chunks, args.img_format, args.retries, args.timeout, args.workers, tmp_dir
+    )
+
+    if not chunk_paths:
+        print("No chunks downloaded successfully - aborting.")
+        sys.exit(1)
+
+    print("Building mosaic...")
+    mosaic_path = build_mosaic(chunk_paths, tmp_dir)
+
+    print(f"Tiling (zoom {args.zoom})...")
+    run_gdal2tiles(
+        mosaic_path,
+        args.outdir,
+        args.zoom,
+        args.xyz,
+        args.resampling,
+        args.processes,
+        args.webviewer,
+    )
+
+    if not args.keep_temp:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    print(
+        f"Done. Tiles written to: {args.outdir} ({'XYZ' if args.xyz else 'TMS'} numbering)"
+    )
 
 
 if __name__ == "__main__":

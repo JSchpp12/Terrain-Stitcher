@@ -5,11 +5,10 @@ from typing import Optional
 
 import numpy as np
 import pyproj
-
-from terrain_stitcher.arcgis.cache_xml import ArcGisCacheInfo
 from terrain_stitcher.arcgis.tile_info import TileInfo
 from terrain_stitcher.arcgis.bounded_tile_info import BoundedTileInfo
 from terrain_stitcher.common import World_Coordinates, Bounds
+from terrain_stitcher.arcgis.tile_scheme import TileSchemeInfo
 
 
 @dataclass
@@ -59,11 +58,11 @@ class TileBoundsCalculator:
     avoiding a second pass over the same arithmetic.
     """
 
-    def __init__(self, cache_info: ArcGisCacheInfo) -> None:
+    def __init__(self, cache_info: TileSchemeInfo) -> None:
         self._cache = cache_info
         self._res_by_id = {lvl.level_id: lvl.resolution for lvl in cache_info.levels}
         self._to_wgs84 = pyproj.Transformer.from_crs(
-            f"EPSG:{cache_info.spatial_reference.value}",
+            f"EPSG:{cache_info.pyproj_epsg}",
             "EPSG:4326",
             always_xy=True,
         )

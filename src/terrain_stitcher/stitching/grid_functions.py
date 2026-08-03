@@ -33,13 +33,40 @@ def _open_tile_image(tile: Tile) -> "pImage.Image":
         ) from exc
 
 
+# --- ratio-gated downscale resample ---------------------------------------
+# Tiles are only ever downscaled (0.0 < scale_factor <= 1.0). The resample
+# filter is ratio-gated so we don't trade away sharpness where there is
+# nothing to gain:
+#   * Small downscale (scale_factor > _PROGRESSIVE_REDUCTION_THRESHOLD): a
+#     single LANCZOS pass. Sharpest available filter, and at small ratios
+#     LANCZOS has no large-ratio aliasing to fix, so progressive reduction
+#     would only soften the result for no benefit.
+#   * Large downscale (scale_factor <= threshold): LANCZOS with reducing_gap,
+#     which pre-shrinks via fast area-averaging (box) passes then runs a final
+#     LANCZOS pass on the pre-reduced image. This avoids the moire/aliasing a
+#     plain LANCZOS introduces at big downscale factors (it undersamples its
+#     wide kernel), and is much faster -- the expensive kernel runs on a
+#     fraction of the pixels.
+#
+# reducing_gap is a PIL parameter that must be >= 1.0 (or None). scale_factor
+# is always <= 1.0, so it must NEVER be passed as reducing_gap -- use
+# resize_tile_for_scale, which applies the gate and supplies _REDUCING_GAP.
+_PROGRESSIVE_REDUCTION_THRESHOLD = 0.25
+_REDUCING_GAP = 2.0
+
+
 def resize_tile(
     src, cell_w, cell_h, reducing_gap: Optional[float] = None
 ) -> "pImage.Image":
-    """Downscale a decoded tile to (cell_w, cell_h), ratio-gated for quality.
+    """Downscale a decoded tile to (cell_w, cell_h) with LANCZOS.
 
-    Returns a new PIL image; the caller owns mode conversion and closing. See
-    the strategy block above for the ratio-gate rationale.
+    ``reducing_gap`` is PIL's progressive-reduction gap (must be >= 1.0 or
+    None); pass it for large downscale ratios to pre-shrink via area
+    averaging before the final LANCZOS pass. Returns a new PIL image; the
+    caller owns mode conversion and closing. For scale_factor-driven
+    downscale use :func:`resize_tile_for_scale` instead -- it applies the
+    ratio gate so ``scale_factor`` (< 1.0) is never misused as
+    ``reducing_gap``.
     """
 
     if reducing_gap is not None:
@@ -47,6 +74,22 @@ def resize_tile(
             (cell_w, cell_h), resample=pImage.LANCZOS, reducing_gap=reducing_gap
         )
     return src.resize((cell_w, cell_h), resample=pImage.LANCZOS)
+
+
+def resize_tile_for_scale(src, cell_w, cell_h, scale_factor):
+    """Downscale a decoded tile to (cell_w, cell_h), ratio-gated for quality.
+
+    The single source of truth for the downscale resample strategy, used by
+    both the strip path (``_stitch_strip``) and the whole-group path
+    (``GatheredTiles.pasteTiles``). Above the threshold a single LANCZOS
+    pass is sharpest; at/below it, LANCZOS with ``_REDUCING_GAP`` pre-shrinks
+    to avoid moire and is faster. See the block above for the rationale.
+    """
+    if scale_factor > _PROGRESSIVE_REDUCTION_THRESHOLD:
+        return resize_tile(src, cell_w, cell_h)
+    return src.resize(
+        (cell_w, cell_h), resample=pImage.LANCZOS, reducing_gap=_REDUCING_GAP
+    )
 
 
 @dataclass
@@ -152,7 +195,7 @@ class GatheredTiles:
         for (row, col), tile in self.get_traversal().items():
             with _open_tile_image(tile) as src:
                 if self.scale_factor != 1.0:
-                    src = resize_tile(
+                    src = resize_tile_for_scale(
                         src,
                         self.cell_width,
                         self.cell_height,

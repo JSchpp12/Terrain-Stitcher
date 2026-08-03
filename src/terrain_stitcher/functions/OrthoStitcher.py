@@ -1,4 +1,9 @@
-from terrain_stitcher.stitching.grid_functions import build_tile_grid, resize_tile
+from terrain_stitcher.stitching.grid_functions import (
+    build_tile_grid,
+    resize_tile_for_scale,
+    _PROGRESSIVE_REDUCTION_THRESHOLD,
+    _REDUCING_GAP,
+)
 from typing import Optional
 from PIL import Image as pImage, UnidentifiedImageError
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -39,35 +44,23 @@ def _buildGroup(
     )
 
 
-# --- downscale resample strategy ------------------------------------------
-# Tiles are only ever downscaled (0.0 < scale_factor <= 1.0). The resample
-# filter is ratio-gated so we don't trade away sharpness where there is nothing
-# to gain:
-#   * Small downscale (scale_factor > _PROGRESSIVE_REDUCTION_THRESHOLD): a
-#     single LANCZOS pass. Sharpest available filter, and at small ratios
-#     LANCZOS has no large-ratio aliasing to fix, so progressive reduction
-#     would only soften the result for no benefit.
-#   * Large downscale (scale_factor <= threshold): LANCZOS with reducing_gap,
-#     which pre-shrinks via fast area-averaging (box) passes then runs a final
-#     LANCZOS pass on the pre-reduced image. This avoids the moire/aliasing a
-#     plain LANCZOS introduces at big downscale factors (it undersamples its
-#     wide kernel), and is much faster -- the expensive kernel runs on a
-#     fraction of the pixels.
-_PROGRESSIVE_REDUCTION_THRESHOLD = 0.25
-_REDUCING_GAP = 2.0
+# The downscale resample strategy (threshold + reducing_gap) and its
+# rationale live with resize_tile_for_scale in grid_functions -- one source
+# of truth shared by the strip path (_stitch_strip) and the whole-group path
+# (GatheredTiles.pasteTiles), so the two can't drift apart (which is what
+# made pasteTiles pass scale_factor, always < 1.0, as reducing_gap, which PIL
+# requires >= 1.0). _PROGRESSIVE_REDUCTION_THRESHOLD and _REDUCING_GAP are
+# re-exported here for _resample_strategy_label and existing callers/tests.
 
 
 def _resize_tile(src, cell_w, cell_h, scale_factor):
     """Downscale a decoded tile to (cell_w, cell_h), ratio-gated for quality.
 
-    Returns a new PIL image; the caller owns mode conversion and closing. See
-    the strategy block above for the ratio-gate rationale.
+    Thin wrapper over :func:`resize_tile_for_scale` (see grid_functions for
+    the threshold / reducing_gap rationale). Kept for the strip path and for
+    callers/tests that reference it by name.
     """
-    if scale_factor > _PROGRESSIVE_REDUCTION_THRESHOLD:
-        return resize_tile(src, cell_w, cell_h)
-    return src.resize(
-        (cell_w, cell_h), resample=pImage.LANCZOS, reducing_gap=_REDUCING_GAP
-    )
+    return resize_tile_for_scale(src, cell_w, cell_h, scale_factor)
 
 
 def _resample_strategy_label(scale_factor):

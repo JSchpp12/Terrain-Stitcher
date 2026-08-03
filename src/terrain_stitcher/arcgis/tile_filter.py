@@ -3,7 +3,7 @@
 import numpy as np
 import pyproj
 
-from terrain_stitcher.arcgis.cache_xml import ArcGisCacheInfo
+from terrain_stitcher.arcgis.tile_scheme import TileSchemeInfo
 from terrain_stitcher.arcgis.tile_info import TileInfo
 from terrain_stitcher.arcgis.tile_bounds import TileFootprints
 from terrain_stitcher.common import World_Bounding_Box
@@ -38,7 +38,7 @@ class ShapeTileFilter:
 
     def __init__(
         self,
-        cache_info: ArcGisCacheInfo,
+        cache_info: TileSchemeInfo,
         region: World_Bounding_Box,
     ) -> None:
         self._cache = cache_info
@@ -46,7 +46,7 @@ class ShapeTileFilter:
 
         to_cache = pyproj.Transformer.from_crs(
             "EPSG:4326",
-            f"EPSG:{cache_info.spatial_reference.value}",
+            f"EPSG:{cache_info.pyproj_epsg}",
             always_xy=True,
         )
         ll = region.get_lower_left()
@@ -61,9 +61,8 @@ class ShapeTileFilter:
         """Projected (min_x, min_y, max_x, max_y) shape region in cache CRS."""
         return self._box
 
-
     @classmethod
-    def from_box(cls, cache_info: "ArcGisCacheInfo", box: tuple) -> "ShapeTileFilter":
+    def from_box(cls, cache_info: TileSchemeInfo, box: tuple) -> "ShapeTileFilter":
         """Build a filter from a precomputed projected box, no Transformer.
 
         ``__init__`` builds a pyproj Transformer only to project the shape

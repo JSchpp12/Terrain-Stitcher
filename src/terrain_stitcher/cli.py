@@ -2,7 +2,8 @@ import argparse
 
 from terrain_stitcher.functions import (
     main_ortho,
-    main_ortho_arcgis,
+    main_ortho_arcgis_import,
+    main_ortho_arcgis_import_from_download,
     main_shape,
     main_prep_ortho,
     main_prep_elevation,
@@ -94,10 +95,17 @@ def addDownloadOrthoArgs(subparser):
         "mirroring prep-geo. Fails if no tile intersects the AOI.",
     )
     parserGenerate.add_argument(
-        "--lod",
+        "--lod_min",
         type=int,
         default=None,
-        help="arcgis only: cache level of detail to stitch. When omitted the "
+        help="arcgis only: lowest cache level of detail to stitch. When omitted the "
+        "highest LOD with surviving tiles is used.",
+    )
+    parserGenerate.add_argument(
+        "--lod_max",
+        type=int,
+        default=None,
+        help="arcgis only: highest cache level of detail to stitch to. When omitted the "
         "highest LOD with surviving tiles is used.",
     )
     parserGenerate.add_argument(
@@ -108,6 +116,57 @@ def addDownloadOrthoArgs(subparser):
         "elevation GeoTIFFs (-e) into one continuous GeoTIFF (default: 0.1, ~1km "
         "at mid-latitudes). Mirrors prep-geo --padding.",
     )
+    parserGenerate.add_argument(
+        "--from-download",
+        action="store_true",
+        default=False,
+        help="arcgis only: import a gdal2tiles XYZ output produced by the "
+        "`download-arcgis` command (point -i at it). Without this flag, -i "
+        "is treated as an ArcGIS Pro exploded tile cache (conf.xml + "
+        "_alllayers).",
+    )
+
+
+def addDownloadArcgisArgs(subparser):
+    parserGenerate = subparser.add_parser("download-arcgis")
+
+    parserGenerate.add_argument(
+        "-s", "--shape", required=True,
+        help="Shape file defining the area to download.",
+    )
+    parserGenerate.add_argument(
+        "-o", "--output", default="output_tiles",
+        help="Directory to write the downloaded tile cache (default: "
+        "output_tiles).",
+    )
+    parserGenerate.add_argument(
+        "--lod", type=int, required=True,
+        help="Zoom level to download and tile at (passed to gdal2tiles as -z).",
+    )
+    parserGenerate.add_argument(
+        "-w", "--workers", type=int, default=32,
+        help="Concurrent download threads (default: 32).",
+    )
+    parserGenerate.add_argument(
+        "--chunk-px", type=int, default=256,
+        help="Pixels per exportImage request chunk (default: 256).",
+    )
+    parserGenerate.add_argument(
+        "--timeout", type=int, default=30,
+        help="Per-request timeout in seconds (default: 30).",
+    )
+    parserGenerate.add_argument(
+        "--resampling", default="lanczos",
+        choices=["average", "near", "bilinear", "cubic", "cubicspline", "lanczos"],
+        help="gdal2tiles resampling (default: lanczos).",
+    )
+    parserGenerate.add_argument(
+        "--processes", type=int, default=32,
+        help="Number of gdal2tiles tiling processes (default: 32).",
+    )
+    parserGenerate.add_argument("--xyz", dest="xyz", action="store_true", default=True)
+    parserGenerate.add_argument("--tms", dest="xyz", action="store_false")
+    parserGenerate.set_defaults(xyz=True)
 
 
 def addPrepOrthoImages(subparser):
@@ -225,6 +284,7 @@ def main():
 
     addCreateBoundsGeneratorArgs(subparser)
     addDownloadOrthoArgs(subparser)
+    addDownloadArcgisArgs(subparser)
     addPrepOrthoImages(subparser)
     addStitchOrthoArgs(subparser)
     addPrepGeoArgs(subparser)
@@ -236,18 +296,46 @@ def main():
     elif args.command == "gather-ortho":
         if args.source == "arcgis":
             # The arcgis source folds prep-ortho + stitch-ortho into the
-            # import: one pass over the cache produces the final stitched
+            # import: one pass over the input tiles produces the final stitched
             # output + manifest. -d/-f/--resume/-e/--lod/--padding are arcgis-only.
+            # Downloading is a separate `download-arcgis` command; this stage only
+            # imports tiles that already exist on disk.
 
             if args.input is None:
-                main_arcgis_downloader(args.shape)
-            else:
-                from terrain_stitcher.functions.ElevationGeoPrep import DEFAULT_PADDING_DEG
-
-                elevation_padding = (
-                    args.padding if args.padding is not None else DEFAULT_PADDING_DEG
+                parser.error(
+                    "gather-ortho -src arcgis requires -i/--input. Run "
+                    "`download-arcgis` first to fetch tiles, then import them "
+                    "with `gather-ortho -src arcgis -i <download_output> "
+                    "--from-download`, or point -i at an ArcGIS Pro exploded "
+                    "tile cache (conf.xml + _alllayers)."
                 )
-                main_ortho_arcgis(
+
+            from terrain_stitcher.functions.ElevationGeoPrep import (
+                DEFAULT_PADDING_DEG,
+            )
+
+            elevation_padding = (
+                args.padding if args.padding is not None else DEFAULT_PADDING_DEG
+            )
+
+            if args.from_download:
+                # Import a gdal2tiles XYZ output produced by `download-arcgis`.
+                main_ortho_arcgis_import_from_download(
+                    shape_file=args.shape,
+                    download_dir=args.input,
+                    min_level=args.lod_min,
+                    max_level=args.lod_max,
+                    output_dir=args.output,
+                    dimension=args.dimension,
+                    scale_factor=args.scaleFactor,
+                    resume=args.resume,
+                    workers=args.workers,
+                    elevation_data_dir=args.elevationDataDir,
+                    elevation_padding_deg=elevation_padding,
+                )
+            else:
+                # Import an ArcGIS Pro exploded tile cache (conf.xml + _alllayers).
+                main_ortho_arcgis_import(
                     args.shape,
                     args.input,
                     args.output,
@@ -256,11 +344,23 @@ def main():
                     resume=args.resume,
                     workers=args.workers,
                     elevation_data_dir=args.elevationDataDir,
-                    lod=args.lod,
+                    lod=args.lod_min,
                     elevation_padding_deg=elevation_padding,
                 )
         else:
-            main_ortho(args.shape, args.output, args.source, args.input, args.workers)
+            main_ortho(args.shape, args.output, args.input, args.workers)
+    elif args.command == "download-arcgis":
+        main_arcgis_downloader(
+            shape_file=args.shape,
+            lod=args.lod,
+            outdir=args.output,
+            xyz=args.xyz,
+            resampling=args.resampling,
+            timeout=args.timeout,
+            num_workers=args.workers,
+            chunk_px=args.chunk_px,
+            processes=args.processes,
+        )
     elif args.command == "prep-ortho":
         # The elevation-prep stage moves every elevation file into the output
         # directory and returns the list of their filenames; record them in

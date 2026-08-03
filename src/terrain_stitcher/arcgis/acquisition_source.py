@@ -6,8 +6,7 @@ from typing import List, Optional
 
 
 from tqdm import tqdm
-
-from terrain_stitcher.arcgis.cache_xml import ArcGisCacheInfo, LevelOfDetailInfo
+from terrain_stitcher.arcgis.tile_scheme import TileSchemeInfo
 from terrain_stitcher.arcgis.tile_files import discover_row_dirs, gather_tile_files
 from terrain_stitcher.arcgis.tile_filter import ShapeTileFilter
 from terrain_stitcher.common import ParseArea
@@ -22,7 +21,6 @@ from terrain_stitcher.arcgis.tile_worker import (
     _WORKER_CACHE,
 )
 
-ALL_LAYERS_DIR = "_alllayers"
 
 def _process_row_worker(row_dir: str) -> tuple[int, int, int]:
     """Handle one entire cache row inside a worker subprocess.
@@ -44,7 +42,37 @@ def _process_row_worker(row_dir: str) -> tuple[int, int, int]:
 
     return _process_tiles(tile_paths)
 
+
+def _cache_tile_path(
+    all_layers_dir: str, level_folder: str, row: int, col: int
+) -> str:
+    """Build an ArcGIS exploded-cache tile PNG path.
+
+    Layout: ``<all_layers_dir>/<L##>/R<row:08x>/C<col:08x>.png`` with
+    8-hex zero-padded row/col. This is the reverse of
+    :meth:`TileInfo.from_paths` and the path builder used by the cache
+    import (``import_from_arcgis_dir``).
+    """
+    return os.path.join(all_layers_dir, level_folder, f"R{row:08x}", f"C{col:08x}.png")
+
+
+def _xyz_tile_path(
+    tiles_root_dir: str, level_folder: str, row: int, col: int
+) -> str:
+    """Build a gdal2tiles / XYZ slippy-map tile PNG path.
+
+    Layout: ``<tiles_root_dir>/<z>/<col>/<row>.png`` (decimal, no R/C
+    prefixes), where ``level_folder`` is the decimal zoom folder, ``col``
+    is the x-directory and ``row`` is the y-file. This is the reverse of
+    :meth:`TileInfo.from_xyz_paths` (which assigns ``col_number=int(x)``
+    and ``row_number=int(y)``) and the path builder used by the download
+    import (``import_from_download``).
+    """
+    return os.path.join(tiles_root_dir, level_folder, f"{col}", f"{row}.png")
+
+
 CONF_XML = "conf.xml"
+
 
 class ArcGisProAcquisitionSource(AcquisitionSource):
     """Acquisition source for orthoimagery exported from ArcGISPro.
@@ -75,34 +103,48 @@ class ArcGisProAcquisitionSource(AcquisitionSource):
     thousand short strings and needs no backpressure.
     """
 
-    def __init__(self, cache_xml_path: Optional[str] = None, extract_function=None) -> None:
-        self._cache_info: Optional[ArcGisCacheInfo] = None
-        self.levels: list[LevelOfDetailInfo] = []
+    def __init__(
+        self,
+        scheme: TileSchemeInfo,
+        extract_function=None,
+        tile_path_for=None,
+    ) -> None:
+        self.scheme = scheme
         self.extract_function = extract_function
-
-        if cache_xml_path is not None:
-            self._load_from_xml(cache_xml_path)
-
-    def _load_from_src(self, path: str) -> None: 
-        pass
-
-    def _load_from_xml(self, cache_xml_path: str) -> None:
-        self._cache_info = ArcGisCacheInfo.from_xml(cache_xml_path)
-        self.levels = list(self._cache_info.levels)
+        self.tile_path_for = tile_path_for
 
     @property
-    def cache_info(self) -> Optional[ArcGisCacheInfo]:
-        return self._cache_info
+    def cache_info(self) -> TileSchemeInfo:
+        return self.scheme
 
     @classmethod
-    def from_cache_dir(cls, cache_dir: str) -> "ArcGisProAcquisitionSource":
+    def from_cache_dir(
+        cls, cache_dir: str, extract_function
+    ) -> "ArcGisProAcquisitionSource":
         """Construct from a cache directory by reading its ``conf.xml``."""
         xml_path = os.path.join(cache_dir, CONF_XML)
         if not os.path.isfile(xml_path):
             raise FileNotFoundError(
                 f"ArcGIS cache directory missing conf.xml: {cache_dir}"
             )
-        return cls(xml_path)
+
+        scheme = TileSchemeInfo.from_arcgis_conf_xml(xml_path)
+
+        return cls(scheme, extract_function, _cache_tile_path)
+
+    @classmethod
+    def from_tile_scheme(
+        cls,
+        *,
+        min_level: int = 0,
+        max_level=23,
+        extract_function,
+    ):
+        cache_info: TileSchemeInfo = TileSchemeInfo.from_web_mercator(
+            min_level=min_level, max_level=max_level
+        )
+
+        return cls(cache_info, extract_function, _xyz_tile_path)
 
     def _build_tile_filter(
         self, shape_file: Optional[str]
@@ -119,6 +161,19 @@ class ArcGisProAcquisitionSource(AcquisitionSource):
             raise FileNotFoundError(f"Shape file not found: {sPath}")
         region = ParseArea.fromJSONFile(sPath).getTotalRegion()
         return ShapeTileFilter(self.cache_info, region)
+
+    @staticmethod
+    def _level_id_from_folder(level_folder: str) -> int:
+        """Parse a level folder name into its integer level id.
+
+        Supports both ArcGIS Pro's "L%02d" convention (e.g. "L05") and bare
+        numeric XYZ zoom folders (e.g. "5", "12") produced by gdal2tiles.
+        """
+        return (
+            int(level_folder[1:])
+            if level_folder[:1].upper() == "L"
+            else int(level_folder)
+        )
 
     def discover_survivors(
         self,
@@ -147,22 +202,12 @@ class ArcGisProAcquisitionSource(AcquisitionSource):
         A cache contains every LOD it was built at, so scoping to one LOD is
         what makes the (row, col) grid non-overlapping.
         """
-        if self._cache_info is None:
-            if input_dir is None:
-                raise ValueError(
-                    "ArcGISPro acquisition requires an input cache "
-                    "directory (-i/--input)"
-                )
-            self._load_from_xml(os.path.join(input_dir, CONF_XML))
-
-        all_layers_dir = os.path.join(str(input_dir), ALL_LAYERS_DIR)
-
         tile_filter = self._build_tile_filter(shape_file)
         box = tile_filter.box if tile_filter is not None else None
 
-        row_dirs = discover_row_dirs(all_layers_dir)
+        row_dirs = discover_row_dirs(input_dir)
         if not row_dirs:
-            print(f"No tile rows found under {all_layers_dir}; nothing to process.")
+            print(f"No tile rows found under {input_dir}; nothing to process.")
             return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), "", None
         print(f"Discovered {len(row_dirs)} row directory(s) across all levels.")
 
@@ -184,7 +229,13 @@ class ArcGisProAcquisitionSource(AcquisitionSource):
         with ProcessPoolExecutor(
             max_workers=num_workers,
             initializer=_init_worker,
-            initargs=(self.cache_info, box, str(all_layers_dir), None, self.extract_function),
+            initargs=(
+                self.scheme,
+                box,
+                str(input_dir),
+                None,
+                self.extract_function,
+            ),
         ) as executor:
             futures = [
                 executor.submit(_discover_row_survivors, row_dir)
@@ -199,7 +250,7 @@ class ArcGisProAcquisitionSource(AcquisitionSource):
                 level_folder, rows_np, cols_np = f.result()
                 if rows_np.size == 0:
                     continue
-                level_id = int(level_folder[1:])
+                level_id = ArcGisProAcquisitionSource._level_id_from_folder(level_folder)
                 by_level_rows.setdefault(level_id, []).append(rows_np)
                 by_level_cols.setdefault(level_id, []).append(cols_np)
                 level_folder_by_level.setdefault(level_id, level_folder)
@@ -251,16 +302,6 @@ class ArcGisProAcquisitionSource(AcquisitionSource):
         follow-up is to split oversized rows into sub-row tasks -- but that
         reintroduces passing per-tile data, which this design avoids.
         """
-        # Ensure cache metadata is loaded from the input directory.
-        if self._cache_info is None:
-            if input_dir is None:
-                raise ValueError(
-                    "ArcGISPro acquisition requires an input cache directory (-i/--input)"
-                )
-            self._load_from_xml(os.path.join(input_dir, CONF_XML))
-
-        all_layers_dir = os.path.join(str(input_dir), ALL_LAYERS_DIR)
-
         # Build the shape filter in the main process only to extract the
         # projected shape box (a picklable tuple).
         # Each worker rebuilds a transformer-free copy from the box via
@@ -273,9 +314,9 @@ class ArcGisProAcquisitionSource(AcquisitionSource):
 
         # Enumerate row directories once (cheap: directory listing only). The
         # per-row walk that materialises tile paths happens inside the workers.
-        row_dirs = discover_row_dirs(all_layers_dir)
+        row_dirs = discover_row_dirs(input_dir)
         if not row_dirs:
-            print(f"No tile rows found under {all_layers_dir}; nothing to process.")
+            print(f"No tile rows found under {input_dir}; nothing to process.")
             return
 
         print(f"Discovered {len(row_dirs)} row directory(s) across all levels.")
@@ -297,7 +338,13 @@ class ArcGisProAcquisitionSource(AcquisitionSource):
             with ProcessPoolExecutor(
                 max_workers=num_workers,
                 initializer=_init_worker,
-                initargs=(self.cache_info, box, str(all_layers_dir), str(out_path), self.extract_function),
+                initargs=(
+                    self.cache_info,
+                    box,
+                    str(input_dir),
+                    str(out_path),
+                    self.extract_function,
+                ),
             ) as executor:
                 futures = [
                     executor.submit(_process_row_worker, row_dir)

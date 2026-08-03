@@ -46,6 +46,7 @@ class StitchedGroup:
     origin: tuple[int, int]
     n_tiles: int
 
+
 def readManifest(input_dir: str) -> dict:
     """Backward-compatible wrapper returning ``{name: Bounds}`` from one load."""
     return ManifestReader(input_dir).nameToBounds
@@ -66,21 +67,6 @@ def readElevationFiles(input_dir: str) -> Optional[list]:
     return data.get("elevation_files")
 
 
-def _arcgis_tile_path(
-    all_layers_dir: str, level_folder: str, row: int, col: int
-) -> str:
-    """Derive a cache tile's PNG path from its (row, col) + the level folder.
-
-    ArcGIS exploded caches lay tiles out as ``_alllayers/<L##>/R<row:08x>/C<col:08x>.png``
-    with 8-hex zero-padded row/col (the same encoding ``tile_chunk_name``
-    round-trips), so once the level folder name is known the full path is a
-    pure function of (row, col). That lets the streaming import path skip
-    storing one ~120-byte path string per tile (gigabytes for a large cache)
-    and derive paths on demand for just the one window being stitched.
-    """
-    return os.path.join(all_layers_dir, level_folder, f"R{row:08x}", f"C{col:08x}.png")
-
-
 def _build_arcgis_group(
     origin: tuple[int, int],
     nr: "np.ndarray",
@@ -91,6 +77,7 @@ def _build_arcgis_group(
     level_folder: str,
     lod: int,
     scale_factor: float,
+    path_builder,
 ) -> "GatheredTiles":
     """Build one window's GatheredTiles from its normalized (row, col) arrays.
 
@@ -122,7 +109,7 @@ def _build_arcgis_group(
         name = f"L{lod:02d}_R{actual_row:08x}_C{actual_col:08x}"
         tile = Tile(
             name=name,
-            image_path=_arcgis_tile_path(
+            image_path=path_builder(
                 all_layers_dir, level_folder, actual_row, actual_col
             ),
             bounds=None,  # geometry-derived at manifest time, not per tile
@@ -239,10 +226,13 @@ def _merge_elevation_into_output(
     return [os.path.basename(merged_path)]
 
 
+ALL_LAYERS_DIR = "_alllayers"
+
+
 def process(
     source,
     shape_file,
-    cache_dir,
+    image_dir,
     output_dir,
     dimension,
     scale_factor,
@@ -252,8 +242,9 @@ def process(
     elevation_data_dir=None,
     elevation_padding_deg=0.0,
 ):
+
     rows, cols, level_folder, chosen_lod = source.discover_survivors(
-        shape_file, cache_dir, num_workers=num_workers, lod=lod
+        shape_file, image_dir, num_workers=num_workers, lod=lod
     )
 
     if rows.size == 0:
@@ -262,8 +253,6 @@ def process(
         return []
 
     print(f"Using LOD {chosen_lod}: {rows.size} tile(s) cover the region")
-
-    all_layers_dir = os.path.join(os.path.abspath(cache_dir), "_alllayers")
 
     # Elevation: merge the GeoTIFFs covering the shape AOI into one continuous
     # GeoTIFF (clipped + composited to EPSG:4326) by reusing the prep-geo merge,
@@ -351,10 +340,11 @@ def process(
                 nc[idxs],
                 min_row,
                 min_col,
-                all_layers_dir,
+                image_dir,
                 level_folder,
                 chosen_lod,
                 scale_factor,
+                source.tile_path_for,
             )
             _stitch_one_group(group, out_abs, pool, num_workers, resume)
             summaries.append(StitchedGroup(origin=origin, n_tiles=len(idxs)))
@@ -370,7 +360,53 @@ def process(
     return summaries
 
 
-def import_from_arcgis(
+CONF_XML = "conf.xml"
+
+
+def import_from_download(
+    shape_file: Optional[str],
+    download_dir: str,
+    min_level: int,
+    max_level: int,
+    output_dir: str,
+    dimension: int = 1,
+    scale_factor: float = 1.0,
+    resume: bool = False,
+    workers: Optional[int] = None,
+    elevation_data_dir: Optional[str] = None,
+    elevation_padding_deg: float = DEFAULT_PADDING_DEG,
+):
+    if dimension < 1:
+        raise ValueError("dimension must be >= 1")
+    if not (0.0 < scale_factor <= 1.0):
+        raise ValueError(
+            "scale_factor must be in (0.0, 1.0]; only downscaling is supported"
+        )
+    os.makedirs(output_dir, exist_ok=True)
+    num_workers = max(1, workers if workers is not None else (os.cpu_count() or 1))
+
+    source = ArcGisProAcquisitionSource.from_tile_scheme(
+        min_level=min_level,
+        max_level=max_level,
+        extract_function=TileInfo.from_xyz_paths,
+    )
+
+    return process(
+        source,
+        shape_file,
+        download_dir,
+        output_dir,
+        dimension,
+        scale_factor,
+        resume,
+        num_workers,
+        elevation_padding_deg=elevation_padding_deg,
+        elevation_data_dir=elevation_data_dir,
+        lod=min_level,
+    )
+
+
+def import_from_arcgis_dir(
     shape_file: Optional[str],
     cache_dir: str,
     output_dir: str,
@@ -422,11 +458,15 @@ def import_from_arcgis(
     os.makedirs(output_dir, exist_ok=True)
     num_workers = max(1, workers if workers is not None else (os.cpu_count() or 1))
 
-    source = ArcGisProAcquisitionSource(extract_function=TileInfo.from_paths)
+    source = ArcGisProAcquisitionSource.from_cache_dir(
+        cache_dir, extract_function=TileInfo.from_paths
+    )
+    all_layers_dir = os.path.join(str(cache_dir), ALL_LAYERS_DIR)
+
     return process(
         source,
         shape_file,
-        cache_dir,
+        all_layers_dir,
         output_dir,
         dimension,
         scale_factor,

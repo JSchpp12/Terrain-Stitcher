@@ -1,5 +1,7 @@
 ﻿from .acquisition_source import ArcGisProAcquisitionSource
-from .cache_xml import ArcGisCacheInfo, CacheSpatialReference, LevelOfDetailInfo
+# from .cache_xml import ArcGisCacheInfo, CacheSpatialReference, LevelOfDetailInfo
+from .level_of_detail import LevelOfDetailInfo
+from .tile_scheme import TileSchemeInfo
 from .tile_files import (
     ALL_LAYERS_DIR,
     SUPPORTED_TILE_FORMAT,
@@ -15,8 +17,6 @@ from .tile_bounds import TileBoundsCalculator
 
 __all__ = [
     "ArcGisProAcquisitionSource",
-    "ArcGisCacheInfo",
-    "CacheSpatialReference",
     "LevelOfDetailInfo",
     "ALL_LAYERS_DIR",
     "SUPPORTED_TILE_FORMAT",
