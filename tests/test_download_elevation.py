@@ -193,7 +193,7 @@ def test_download_arcgis_selects_imagery_not_elevation(monkeypatch, tmp_path, ca
     elevation-only service -- even when it is the only covering layer."""
     # Only an elevation service covers this AOI.
     monkeypatch.setattr(
-        ElevationDownloader, "load_services", lambda: {"dem": _elev_service("dem")}
+        OrthoDownloader, "load_services", lambda: {"dem": _elev_service("dem")}
     )
 
     with pytest.raises(ValueError) as ei:

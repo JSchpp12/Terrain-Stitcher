@@ -838,6 +838,7 @@ def main():
             num_workers=args.workers,
             chunk_px=args.chunk_px,
             processes=args.processes,
+            service_index=args.service_index,
         )
     elif args.command == "download-elevation":
         main_elevation(
