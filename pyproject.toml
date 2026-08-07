@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "terrain_stitcher"
-version = "0.2.1"
+version = "0.2.2"
 description = "Terrain Scraper"
 requires-python = ">=3.9"
 dependencies = [
@@ -17,6 +17,7 @@ dependencies = [
     "rasterio>=1.4.3",
     "shapely>=2.0.7",
     "psutil>=5.9.0",
+    "platformdirs>=4.2.0",
     "tqdm>=4.67.3",
 ]
 
@@ -31,6 +32,9 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/terrain_stitcher"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/terrain_stitcher/arcgis/services_to_scan.json" = "terrain_stitcher/arcgis/services_to_scan.json"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
