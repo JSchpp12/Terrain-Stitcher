@@ -1,0 +1,17 @@
+[
+  {
+    "url": "https://apps.geo.fpac.usda.gov/nrcs-imagery/rest/services/ortho_imagery/alaska_vivid_2023_30cm/ImageServer",
+    "pixel_size": 0.2985821417389697,
+    "kinds": ["imagery"]
+  },
+  {
+    "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer",
+    "pixel_size": 0.3,
+    "kinds": ["imagery"]
+  },
+  {
+    "url": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer",
+    "kinds": ["elevation"],
+    "pixel_size": 10.0
+  }
+]
