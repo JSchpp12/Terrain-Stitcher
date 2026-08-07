@@ -1,57 +1,30 @@
-import importlib
+from __future__ import annotations
+
+import json
 import math
 import shutil
 import subprocess
 import sys
 import time
-import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from tqdm import tqdm
 
 import requests
 from pyproj import Transformer
+from tqdm import tqdm
 
-from terrain_stitcher.common.ParseArea import ParseArea
-
-# --- Service-specific settings ---------------------------------------------
-# from alaska_vivid_2023_30cm ImageServer tileInfo
-
-BASE_URL = (
-    "https://apps.geo.fpac.usda.gov/nrcs-imagery/rest/services/"
-    "ortho_imagery/alaska_vivid_2023_30cm/ImageServer/exportImage"
+from terrain_stitcher.arcgis.services import (
+    AmbiguousServiceError,
+    ImageryService,
+    load_services,
+    select_service,
 )
-NATIVE_PIXEL_SIZE_M = 0.2985821417389697  # ~30cm, from the service's tileInfo
-SRS = 3857
-# ----------------------------------------------------------------------------
 
 WGS84_TO_WEBMERC = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
 
 TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
 
-
-def pixel_size_for_zoom(zoom: int) -> float:
-    # standard web mercator resolution at zoom z, at the equator
-    earth_circumference_m = 2 * math.pi * 6378137.0
-    return earth_circumference_m / (256 * 2**zoom)
-
-
-def bbox_from_radius(lat: float, lon: float, radius_miles: float):
-    """Bounding box (xmin, ymin, xmax, ymax) in EPSG:3857 meters corresponding
-    to a real-world radius in miles around lat/lon."""
-    radius_m = radius_miles * 1609.344
-    meters_per_deg_lat = 111_320.0
-    meters_per_deg_lon = 111_320.0 * math.cos(math.radians(lat))
-
-    dlat = radius_m / meters_per_deg_lat
-    dlon = radius_m / meters_per_deg_lon
-
-    lat_min, lat_max = lat - dlat, lat + dlat
-    lon_min, lon_max = lon - dlon, lon + dlon
-
-    xmin, ymin = WGS84_TO_WEBMERC.transform(lon_min, lat_min)
-    xmax, ymax = WGS84_TO_WEBMERC.transform(lon_max, lat_max)
-    return xmin, ymin, xmax, ymax
+MANIFEST_FILENAME = "manifest.json"
 
 
 def build_chunk_grid(xmin, ymin, xmax, ymax, chunk_px: int, pixel_size_m: float):
@@ -98,18 +71,20 @@ def build_chunk_grid(xmin, ymin, xmax, ymax, chunk_px: int, pixel_size_m: float)
 
 def fetch_chunk(
     session: requests.Session,
+    service: ImageryService,
     chunk: dict,
     img_format: str,
     max_retries: int,
     timeout: int,
+    pixel_type: str = "U8",
 ) -> bytes:
     params = {
         "bbox": f"{chunk['xmin']},{chunk['ymin']},{chunk['xmax']},{chunk['ymax']}",
-        "bboxSR": SRS,
-        "imageSR": SRS,
+        "bboxSR": service.srs,
+        "imageSR": service.srs,
         "size": f"{chunk['w']},{chunk['h']}",
         "format": img_format,
-        "pixelType": "U8",
+        "pixelType": pixel_type,
         "interpolation": "RSP_BilinearInterpolation",
         "f": "image",
     }
@@ -117,7 +92,7 @@ def fetch_chunk(
     last_error = None
     for attempt in range(1, max_retries + 1):
         try:
-            resp = session.get(BASE_URL, params=params, timeout=timeout)
+            resp = session.get(service.base_url, params=params, timeout=timeout)
         except requests.RequestException as e:
             last_error = e
             time.sleep(min(2**attempt, 30))
@@ -144,10 +119,12 @@ def fetch_chunk(
     )
 
 
-def _georeference_inprocess(raw_path: Path, out_path: Path, chunk: dict) -> Path:
+def _georeference_inprocess(
+    raw_path: Path, out_path: Path, chunk: dict, srs: int
+) -> Path:
     """Georeference a raw image using the GDAL Python bindings.
 
-    Equivalent to ``gdal_translate -a_srs EPSG:{SRS} -a_ullr ...`` but runs
+    Equivalent to ``gdal_translate -a_srs EPSG:{srs} -a_ullr ...`` but runs
     in-process, avoiding the ~30-50 ms per-call subprocess-spawn overhead on
     Windows that dominates the cost for small chunks.
     """
@@ -156,7 +133,7 @@ def _georeference_inprocess(raw_path: Path, out_path: Path, chunk: dict) -> Path
     options = gdal.TranslateOptions(
         [
             "-a_srs",
-            f"EPSG:{SRS}",
+            f"EPSG:{srs}",
             "-a_ullr",
             str(chunk["xmin"]),
             str(chunk["ymax"]),
@@ -175,7 +152,9 @@ def _georeference_inprocess(raw_path: Path, out_path: Path, chunk: dict) -> Path
     return out_path
 
 
-def _georeference_subprocess(raw_path: Path, out_path: Path, chunk: dict) -> Path:
+def _georeference_subprocess(
+    raw_path: Path, out_path: Path, chunk: dict, srs: int
+) -> Path:
     """Georeference a raw image by shelling out to ``gdal_translate``.
 
     Fallback used when the GDAL Python bindings are not importable.
@@ -184,7 +163,7 @@ def _georeference_subprocess(raw_path: Path, out_path: Path, chunk: dict) -> Pat
         [
             "gdal_translate",
             "-a_srs",
-            f"EPSG:{SRS}",
+            f"EPSG:{srs}",
             "-a_ullr",
             str(chunk["xmin"]),
             str(chunk["ymax"]),
@@ -201,7 +180,7 @@ def _georeference_subprocess(raw_path: Path, out_path: Path, chunk: dict) -> Pat
 
 
 def georeference_chunk(
-    raw_bytes: bytes, chunk: dict, img_format: str, tmp_dir: Path
+    raw_bytes: bytes, chunk: dict, img_format: str, tmp_dir: Path, srs: int
 ) -> Path:
     ext = "tif" if img_format == "tiff" else img_format
     raw_path = tmp_dir / f"raw_{chunk['col']}_{chunk['row']}.{ext}"
@@ -209,15 +188,29 @@ def georeference_chunk(
 
     out_path = tmp_dir / f"chunk_{chunk['col']}_{chunk['row']}.tif"
     try:
-        _georeference_inprocess(raw_path, out_path, chunk)
+        _georeference_inprocess(raw_path, out_path, chunk, srs)
     except ImportError:
-        _georeference_subprocess(raw_path, out_path, chunk)
+        _georeference_subprocess(raw_path, out_path, chunk, srs)
     finally:
         raw_path.unlink(missing_ok=True)
     return out_path
 
 
-MANIFEST_FILENAME = "manifest.json"
+def write_chunk_direct(
+    raw_bytes: bytes, chunk: dict, img_format: str, tmp_dir: Path
+) -> Path:
+    """Persist an already-georeferenced exportImage response directly.
+
+    Used by the elevation path: ``format=tiff`` + ``pixelType=F32`` chunks
+    come back as fully georeferenced GeoTIFFs (they carry their own affine
+    transform + SRS), so unlike raw PNG ortho chunks they need no
+    ``-a_ullr`` / ``-a_srs`` pass. Writes ``chunk_{col}_{row}.tif`` to match
+    the filename convention the manifest and on-disk recovery expect.
+    """
+    ext = "tif" if img_format == "tiff" else img_format
+    out_path = tmp_dir / f"chunk_{chunk['col']}_{chunk['row']}.{ext}"
+    out_path.write_bytes(raw_bytes)
+    return out_path
 
 
 def _chunk_key(chunk: dict) -> str:
@@ -325,10 +318,24 @@ def _verify_chunk(path: Path) -> bool:
 
 
 def download_all_chunks(
-    chunks, img_format, max_retries, timeout, workers, tmp_dir: Path
+    chunks,
+    service: ImageryService,
+    img_format,
+    max_retries,
+    timeout,
+    workers,
+    tmp_dir: Path,
+    pixel_type: str = "U8",
+    georeference: bool = True,
 ) -> tuple[list[Path], list[dict]]:
     """Download *chunks* into *tmp_dir*, skipping any that already appear as
     downloaded in a previous run's manifest (and whose GeoTIFF still exists).
+
+    ``pixel_type`` selects the exportImage band depth (``U8`` for ortho PNGs,
+    ``F32`` for elevation). When ``georeference`` is True (ortho) raw bytes
+    are passed through :func:`georeference_chunk`; when False (elevation) the
+    already-georeferenced TIFF bytes are written directly via
+    :func:`write_chunk_direct`.
 
     Returns ``(chunk_paths, failed)`` where *chunk_paths* are the GeoTIFFs of
     every successfully fetched chunk (reused + freshly downloaded) and
@@ -413,7 +420,16 @@ def download_all_chunks(
 
     with requests.Session() as session, ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
-            pool.submit(fetch_chunk, session, c, img_format, max_retries, timeout): c
+            pool.submit(
+                fetch_chunk,
+                session,
+                service,
+                c,
+                img_format,
+                max_retries,
+                timeout,
+                pixel_type,
+            ): c
             for c in to_download
         }
 
@@ -423,7 +439,12 @@ def download_all_chunks(
                 key = _chunk_key(chunk)
                 try:
                     raw_bytes = future.result()
-                    path = georeference_chunk(raw_bytes, chunk, img_format, tmp_dir)
+                    if georeference:
+                        path = georeference_chunk(
+                            raw_bytes, chunk, img_format, tmp_dir, service.srs
+                        )
+                    else:
+                        path = write_chunk_direct(raw_bytes, chunk, img_format, tmp_dir)
                     chunk_paths.append(path)
                     manifest[key] = {"status": "downloaded", "file": path.name}
                     pbar.set_postfix_str(f"Chunk ({chunk['col']},{chunk['row']}) OK")
@@ -459,127 +480,106 @@ def build_mosaic(chunk_paths, tmp_dir: Path) -> Path:
     return vrt_path
 
 
-def run_gdal2tiles(
-    raster_path: Path,
-    outdir: str,
-    lod: str,
-    xyz: bool,
-    resampling: str,
-    processes: int,
-    webviewer: str,
-):
-    base_args = [
-        "-z",
-        str(lod),
-        "-w",
-        webviewer,
-        "-r",
-        resampling,
-        "--processes",
-        str(processes),
-    ]
-    if xyz:
-        base_args.append("--xyz")
-    base_args += [str(raster_path), outdir]
+def _translate_to_geotiff(vrt_path: Path, out_path: Path) -> Path:
+    """Burn a VRT into a single standalone GeoTIFF at *out_path*.
 
-    exe = shutil.which("gdal2tiles.py") or shutil.which("gdal2tiles")
-    if exe:
-        subprocess.run([exe, *base_args], check=True)
-        return
+    Tries the GDAL Python bindings first (in-process), falling back to the
+    ``gdal_translate`` command-line tool when they are not importable.
+    """
+    try:
+        from osgeo import gdal
 
-    for module_name in ("osgeo_utils.gdal2tiles", "gdal2tiles"):
+        ds = gdal.Translate(str(out_path), str(vrt_path), format="GTiff")
+        if ds is None:
+            raise RuntimeError(f"gdal.Translate failed for {vrt_path}")
+        ds = None
+        return Path(out_path)
+    except ImportError:
+        subprocess.run(
+            ["gdal_translate", str(vrt_path), str(out_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return Path(out_path)
+
+
+class ArcGISDownloaderBase:
+    """Shared plumbing for ArcGIS raster downloaders.
+
+    Subclasses (``OrthoDownloader``, ``ElevationDownloader``) set the
+    capability ``kind`` and the fetch parameters (image ``format``,
+    ``pixel_type``, and whether the raw exportImage bytes are already
+    georeferenced), then implement the rest of their pipeline (tiling vs.
+    merged-GeoTIFF). This class provides common service resolution and the
+    shared chunk-download/mosaic helpers.
+    """
+
+    kind = "imagery"
+    img_format = "png"
+    pixel_type = "U8"
+    georeference = True
+    tmp_dir_name = "aoi_chunks"
+    default_max_retries = 5
+
+    def __init__(
+        self,
+        service: ImageryService | None = None,
+        service_index: int | None = None,
+    ):
+        self.service = service
+        self.service_index = service_index
+
+    def resolve_service(self, loader, aoi_bbox) -> ImageryService:
+        """Pick a registered service of this downloader's ``kind`` for the AOI.
+
+        ``loader`` is a zero-arg callable returning the service registry
+        (usually :func:`terrain_stitcher.arcgis.services.load_services`).
+        When an explicit ``service`` was supplied to the constructor it is
+        returned unchanged. When several candidates cover the AOI and no
+        ``service_index`` disambiguates, the candidate list is printed and the
+        process exits (2).
+        """
+        if self.service is not None:
+            return self.service
         try:
-            importlib.import_module(module_name)
-        except ImportError:
-            continue
-        subprocess.run([sys.executable, "-m", module_name, *base_args], check=True)
-        return
+            service = select_service(
+                loader(), aoi_bbox, index=self.service_index, kind=self.kind
+            )
+        except AmbiguousServiceError as e:
+            print(
+                f"Multiple {self.kind} services cover this area. Re-run with "
+                "`--service-index <N>` to choose one:"
+            )
+            for i, s in enumerate(e.candidates):
+                print(
+                    f"  {i}: {s.label} ({s.key})  "
+                    f"native {s.native_pixel_size_m:.4f} m/px"
+                )
+            sys.exit(2)
+        print(f"Selected {self.kind} service: {service.label} ({service.key})")
+        return service
 
-    raise RuntimeError(
-        "Could not find gdal2tiles. Install with:\n"
-        "  conda install -c conda-forge gdal\n"
-        "  (or) pip install gdal2tiles-leaflet"
-    )
-
-
-def download_from_arcgis(
-    shapefile_path: str,
-    outdir,
-    zoom,
-    xyz,
-    resampling,
-    processes,
-    timeout,
-    num_workers,
-    chunk_px,
-):
-    shape_area = ParseArea.fromJSONFile(shapefile_path)
-
-    xmin, ymin, xmax, ymax = bbox_from_radius(
-        shape_area.center.get_lat(),
-        shape_area.center.get_lon(),
-        shape_area.view_distance,
-    )
-    print(f"AOI bbox (EPSG:3857): {xmin:.1f}, {ymin:.1f}, {xmax:.1f}, {ymax:.1f}")
-
-    tmp_dir = Path("aoi_chunks")
-    tmp_dir.mkdir(exist_ok=True)
-
-    pixel_size_m = max(NATIVE_PIXEL_SIZE_M, pixel_size_for_zoom(zoom))
-
-    chunks = build_chunk_grid(xmin, ymin, xmax, ymax, chunk_px, pixel_size_m)
-
-    print(f"Downloading {len(chunks)} chunks with {num_workers} workers...")
-    chunk_paths, failed = download_all_chunks(
-        chunks, "png", 5, timeout, num_workers, tmp_dir
-    )
-
-    if not chunk_paths:
-        print("No chunks downloaded successfully - aborting.")
-        sys.exit(1)
-
-    print("Building mosaic...")
-    mosaic_path = build_mosaic(chunk_paths, tmp_dir)
-
-    print(f"Tiling (zoom {zoom})...")
-    run_gdal2tiles(mosaic_path, outdir, zoom, xyz, resampling, processes, "none")
-
-    if failed:
-        print(
-            f"\nCompleted with {len(failed)} failed chunk(s). "
-            f"Tiles written to: {outdir} ({'XYZ' if xyz else 'TMS'} numbering), "
-            f"but gaps exist where chunks failed.\n"
-            f"Temporary chunk files kept in {tmp_dir} -- re-run the same "
-            f"command to retry only the {len(failed)} failed chunk(s)."
+    def download_chunks(
+        self,
+        service: ImageryService,
+        chunks,
+        tmp_dir: Path,
+        timeout: int,
+        num_workers: int,
+        max_retries: int | None = None,
+    ) -> tuple[list[Path], list[dict]]:
+        """Download *chunks* for *service* into *tmp_dir* using this
+        downloader's ``img_format`` / ``pixel_type`` / ``georeference``."""
+        max_retries = self.default_max_retries if max_retries is None else max_retries
+        return download_all_chunks(
+            chunks,
+            service,
+            self.img_format,
+            max_retries,
+            timeout,
+            num_workers,
+            tmp_dir,
+            pixel_type=self.pixel_type,
+            georeference=self.georeference,
         )
-    else:
-        # all chunks succeeded -- safe to clean up temporary files
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        print(
-            f"Done. Tiles written to: {outdir} "
-            f"({'XYZ' if xyz else 'TMS'} numbering)"
-        )
-
-
-def main(
-    shape_file,
-    lod: int,
-    outdir="output_tiles",
-    xyz: bool = True,
-    resampling: str = "lanczos",
-    processes: int = 32,
-    timeout: int = 30,
-    num_workers: int = 32,
-    chunk_px: int = 256,
-):
-    download_from_arcgis(
-        shapefile_path=shape_file,
-        outdir=outdir,
-        zoom=lod,
-        xyz=xyz,
-        resampling=resampling,
-        processes=processes,
-        timeout=timeout,
-        num_workers=num_workers,
-        chunk_px=chunk_px,
-    )
