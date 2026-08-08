@@ -1,6 +1,7 @@
 ﻿import argparse
 
 from terrain_stitcher.functions import (
+    main_process_terrain,
     main_ortho,
     main_ortho_arcgis_import,
     main_ortho_arcgis_import_from_download,
@@ -374,6 +375,13 @@ def addDownloadArcgisArgs(subparser):
             "without it to print the candidates and their native resolutions."
         ),
     )
+    parserGenerate.add_argument(
+        "--skip_mosaic",
+        dest="skip_mosaic",
+        action="store_true",
+        default=False,
+        help="Flag to set downloader to skip processing raw downloaded chunks",
+    )
 
 
 def addDownloadElevationArgs(subparser):
@@ -523,8 +531,7 @@ def addPrepOrthoImages(subparser):
     parserGenerate = subparser.add_parser(
         "prep-ortho",
         help=(
-            "Prepare gathered ortho zips into PNGs + height_info.json for "
-            "stitching"
+            "Prepare gathered ortho zips into PNGs + height_info.json for " "stitching"
         ),
         description=(
             "Process the ortho zips gathered by `gather-ortho -src usgs` into "
@@ -688,6 +695,7 @@ def addStitchOrthoArgs(subparser):
         ),
     )
 
+
 def addPrepGeoArgs(subparser):
     parserGenerate = subparser.add_parser(
         "prep-geo",
@@ -744,6 +752,195 @@ def addPrepGeoArgs(subparser):
         ),
     )
 
+
+def addProcessTerrainArgs(subparser):
+    parserGenerate = subparser.add_parser(
+        "process-terrain",
+        help=(
+            "Run a full download + gather pass producing 2-3 quality tiers of "
+            "the same AOI in one command"
+        ),
+        description=(
+            "Run a full terrain pass for a shape AOI: download the orthoimagery "
+            "once at the highest requested LOD and gather it into one directory "
+            "per quality tier. Low quality is LOD 17 and high quality is LOD 18; "
+            "add --ultra to also produce an ultra-quality LOD 19 tier. Each tier "
+            "is written to <output>/<name>_<lod> (e.g. perryville_17) with the "
+            "same gathered_r*_c*.png + height_info.json schema gather-ortho "
+            "produces, so downstream consumers need no changes. Chunking is "
+            "mandatory: -d/--dimension must be >= 2 (dimension 1 would emit one "
+            "file per tile -- thousands for a real AOI). With --with-elevation "
+            "a continuous elevation GeoTIFF is downloaded once (download-"
+            "elevation) and merged into every tier via gather-ortho -e."
+        ),
+    )
+
+    parserGenerate.add_argument(
+        "--name",
+        required=True,
+        help=(
+            "Base name for the output directories. Each tier is written to "
+            "<output>/<name>_<lod> (e.g. --name perryville -> perryville_17, "
+            "perryville_18, perryville_19). The shared gdal2tiles pyramid is "
+            "kept in <output>/<name>_tiles (deleted afterward unless "
+            "--keep-tiles) and elevation in <output>/<name>_elevation."
+        ),
+    )
+    parserGenerate.add_argument(
+        "-s",
+        "--shape",
+        required=True,
+        help=(
+            "Shape file (Shape.json, produced by create-bounds) defining the "
+            "area of interest. The whole AOI must fit inside a single "
+            "registered imagery service (and elevation service when "
+            "--with-elevation is set)."
+        ),
+    )
+    parserGenerate.add_argument(
+        "-o",
+        "--output",
+        default=".",
+        help=(
+            "Base directory under which the per-tier output directories are "
+            "created (default: current directory)."
+        ),
+    )
+    parserGenerate.add_argument(
+        "-d",
+        "--dimension",
+        type=int,
+        required=True,
+        help=(
+            "Square side length to combine tiles into per output image "
+            "(2 = 2x2 -> 1 image). MUST be >= 2: chunking is enforced because "
+            "dimension 1 would emit one file per tile (thousands for a real "
+            "AOI). Mirrors gather-ortho -d."
+        ),
+    )
+    parserGenerate.add_argument(
+        "--ultra",
+        action="store_true",
+        default=False,
+        help=(
+            "Also produce an ultra-quality LOD 19 tier (<name>_19). Without "
+            "this flag only LOD 17 and LOD 18 are produced. The download is "
+            "run at LOD 19 when set, LOD 18 otherwise."
+        ),
+    )
+    parserGenerate.add_argument(
+        "--with-elevation",
+        action="store_true",
+        default=False,
+        help=(
+            "Download a continuous Float32 elevation GeoTIFF once "
+            "(download-elevation) into <name>_elevation and merge it into "
+            "every tier's output (gather-ortho -e). Off by default to match "
+            "the ortho-only run.bat flow."
+        ),
+    )
+    parserGenerate.add_argument(
+        "--keep-tiles",
+        action="store_true",
+        default=False,
+        help=(
+            "Keep the intermediate <name>_tiles gdal2tiles pyramid (and any "
+            "per-LOD fallback pyramids) after gathering. By default they are "
+            "deleted once all tiers are gathered; keep them to resume / re-run "
+            "gathers without re-downloading."
+        ),
+    )
+    parserGenerate.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip groups whose stitched output already exists in each tier "
+            "(passed to gather-ortho). Use to continue an interrupted gather "
+            "pass; combine with --keep-tiles so the pyramid is still present."
+        ),
+    )
+    parserGenerate.add_argument(
+        "-f",
+        "--scaleFactor",
+        type=float,
+        default=1.0,
+        help=(
+            "Downscale each tile by this fraction during stitching, applied to "
+            "every tier (0.0 < value <= 1.0; 1.0 = no scaling, default). Only "
+            "downscaling is supported. Mirrors gather-ortho -f."
+        ),
+    )
+    parserGenerate.add_argument(
+        "-w",
+        "--workers",
+        type=int,
+        default=32,
+        help=(
+            "Concurrent download threads for download-arcgis / download-"
+            "elevation (default: 32)."
+        ),
+    )
+    parserGenerate.add_argument(
+        "--gather-workers",
+        type=int,
+        default=None,
+        help=(
+            "Worker processes for each tier's gather-ortho stitch (default: "
+            "os.cpu_count). Each worker holds one group's canvas in memory, so "
+            "lower this if a high-LOD tier with a large --dimension exhausts "
+            "memory."
+        ),
+    )
+    parserGenerate.add_argument(
+        "--chunk-px",
+        type=int,
+        default=256,
+        help=(
+            "Pixels per exportImage request chunk for the downloads (default: "
+            "256). Mirrors download-arcgis/download-elevation --chunk-px."
+        ),
+    )
+    parserGenerate.add_argument(
+        "--timeout",
+        type=int,
+        default=30,
+        help=(
+            "Per-request timeout in seconds for the downloads (default: 30). "
+            "Transient HTTP failures are retried with backoff."
+        ),
+    )
+    parserGenerate.add_argument(
+        "--resampling",
+        default="lanczos",
+        choices=["average", "near", "bilinear", "cubic", "cubicspline", "lanczos"],
+        help=(
+            "gdal2tiles resampling method for the download (default: lanczos). "
+            "Mirrors download-arcgis --resampling."
+        ),
+    )
+    parserGenerate.add_argument(
+        "--processes",
+        type=int,
+        default=32,
+        help=(
+            "Number of gdal2tiles tiling processes for the download (default: "
+            "32). Mirrors download-arcgis --processes."
+        ),
+    )
+    parserGenerate.add_argument(
+        "--service-index",
+        type=int,
+        default=None,
+        help=(
+            "When several imagery/elevation services cover the AOI, pick one "
+            "by its 0-based index. Forwarded to both download-arcgis and "
+            "download-elevation. Only needed when more than one registered "
+            "service fully covers the AOI."
+        ),
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="TerrainStitcher",
@@ -766,6 +963,7 @@ def main():
     addPrepOrthoImages(subparser)
     addStitchOrthoArgs(subparser)
     addPrepGeoArgs(subparser)
+    addProcessTerrainArgs(subparser)
 
     args = parser.parse_args()
 
@@ -839,6 +1037,7 @@ def main():
             chunk_px=args.chunk_px,
             processes=args.processes,
             service_index=args.service_index,
+            skip_mosaic=args.skip_mosaic,
         )
     elif args.command == "download-elevation":
         main_elevation(
@@ -880,5 +1079,30 @@ def main():
 
         padding = args.padding if args.padding is not None else DEFAULT_PADDING_DEG
         main_prep_geo(args.shape, args.input, args.output, padding_deg=padding)
+    elif args.command == "process-terrain":
+        if args.dimension < 2:
+            parser.error(
+                "process-terrain requires -d/--dimension >= 2 (chunking is "
+                "enforced: dimension 1 would emit one file per tile, thousands "
+                "for a real AOI)."
+            )
+        main_process_terrain(
+            name=args.name,
+            shape_file=args.shape,
+            output=args.output,
+            dimension=args.dimension,
+            ultra=args.ultra,
+            with_elevation=args.with_elevation,
+            keep_tiles=args.keep_tiles,
+            resume=args.resume,
+            scale_factor=args.scaleFactor,
+            workers=args.workers,
+            processes=args.processes,
+            gather_workers=args.gather_workers,
+            chunk_px=args.chunk_px,
+            timeout=args.timeout,
+            resampling=args.resampling,
+            service_index=args.service_index,
+        )
     else:
         print("Unknown command type")

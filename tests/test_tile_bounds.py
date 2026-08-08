@@ -1,13 +1,24 @@
-﻿from __future__ import annotations
+﻿"""Tests for TileBoundsCalculator (WGS84 Bounds for ArcGIS cache tiles).
+
+Pinned to the perryville fixture: 3 real PNGs under
+_alllayers/L23/R0027e3a0/. Bounds must land near Perryville, AK (~55.9N,
+159.6W) -- a sign error in the row/col->footprint math would push the
+lat/lon well outside that range (or yield NaN past the Web Mercator limit).
+"""
+from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
 
-from terrain_stitcher.arcgis.cache_xml import ArcGisCacheInfo
-from terrain_stitcher.arcgis.tile_bounds import TileBoundsCalculator, TileFootprints
-from terrain_stitcher.arcgis.tile_info import BoundedTileInfo, TileInfo
-from terrain_stitcher.sources import Bounds
+from terrain_stitcher.arcgis.bounded_tile_info import BoundedTileInfo
+from terrain_stitcher.arcgis.tile_bounds import (
+    TileBoundsCalculator,
+    TileFootprints,
+)
+from terrain_stitcher.arcgis.tile_info import TileInfo
+from terrain_stitcher.arcgis.tile_scheme import TileSchemeInfo
+from terrain_stitcher.common import Bounds
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "arcgis_cache"
 CONF_XML = FIXTURE_DIR / "conf.xml"
@@ -16,7 +27,7 @@ ALL_LAYERS = FIXTURE_DIR / "_alllayers"
 
 @pytest.fixture
 def calculator():
-    return TileBoundsCalculator(ArcGisCacheInfo.from_xml(str(CONF_XML)))
+    return TileBoundsCalculator(TileSchemeInfo.from_arcgis_conf_xml(str(CONF_XML)))
 
 
 def _tile(name: str) -> TileInfo:
@@ -43,8 +54,6 @@ def test_bounds_compass_orientation(calculator):
 
 
 def test_bounds_land_near_perryville_alaska(calculator):
-    # perryville, AK is ~55.91N, 159.6W; a sign error would put lat/lon
-    # out of this range (or yield NaN past the Web Mercator north limit).
     b = calculator.bounds_for(_tile("C00075f6b.png"))
     lat = b.coords_center.get_lat()
     lon = b.coords_center.get_lon()
@@ -77,9 +86,6 @@ def test_bounds_for_all_empty(calculator):
 
 
 def test_bounds_for_all_accepts_precomputed_footprints(calculator):
-    # The acquire() path computes footprints once (for the shape filter) and
-    # hands the surviving arrays back into bounds_for_all. Feeding the same
-    # footprints in must yield identical BoundedTileInfo to recomputing them.
     names = ["C00075f6b.png", "C00075f6c.png", "C00075f6d.png"]
     tiles = [_tile(n) for n in names]
 

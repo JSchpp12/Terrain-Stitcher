@@ -1,4 +1,11 @@
-﻿from __future__ import annotations
+﻿"""Tests for the ArcGIS cache tile -> zip + sidecar pipeline (tile_zip).
+
+Pinned to the perryville fixture (3 real PNGs at L23/R0027e3a0/). The zip
+archive round-trips the source PNG under its original filename, the sidecar
+JSON uses the ImageDataWriter schema, and the end-to-end acquire() path
+produces one zip + one sidecar per fixture tile.
+"""
+from __future__ import annotations
 
 import json
 import zipfile
@@ -6,9 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from terrain_stitcher.arcgis.cache_xml import ArcGisCacheInfo
+from terrain_stitcher.arcgis.bounded_tile_info import BoundedTileInfo
 from terrain_stitcher.arcgis.tile_bounds import TileBoundsCalculator
-from terrain_stitcher.arcgis.tile_info import BoundedTileInfo, TileInfo
+from terrain_stitcher.arcgis.tile_info import TileInfo
+from terrain_stitcher.arcgis.tile_scheme import TileSchemeInfo
 from terrain_stitcher.arcgis.tile_zip import (
     compress_tile_to_zip,
     process_tile,
@@ -16,7 +24,8 @@ from terrain_stitcher.arcgis.tile_zip import (
     tile_chunk_name,
     write_tile_sidecar,
 )
-from terrain_stitcher.sources import Bounds, ImageDataWriter
+from terrain_stitcher.common import Bounds
+from terrain_stitcher.sources import ImageDataWriter
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "arcgis_cache"
 CONF_XML = FIXTURE_DIR / "conf.xml"
@@ -33,7 +42,7 @@ def _tile(name: str) -> TileInfo:
 
 @pytest.fixture
 def calculator():
-    return TileBoundsCalculator(ArcGisCacheInfo.from_xml(str(CONF_XML)))
+    return TileBoundsCalculator(TileSchemeInfo.from_arcgis_conf_xml(str(CONF_XML)))
 
 
 # --- tile_chunk_name -------------------------------------------------------
@@ -169,20 +178,3 @@ def test_process_tiles_parallel_creates_all(tmp_path, calculator):
 def test_process_tiles_empty(tmp_path):
     assert process_tiles([], ALL_LAYERS, tmp_path) == []
 
-
-# --- end-to-end via ArcGisProAcquisitionSource.acquire ----------------------
-
-
-def test_acquire_writes_zips_and_sidecars(tmp_path):
-    from terrain_stitcher.arcgis.acquisition_import import ArcGisProAcquisitionSource
-
-    src = ArcGisProAcquisitionSource.from_cache_dir(str(FIXTURE_DIR))
-    out = tmp_path / "out"
-
-    src.acquire(None, str(out), str(FIXTURE_DIR))
-
-    names = ["C00075f6b.png", "C00075f6c.png", "C00075f6d.png"]
-    for n in names:
-        chunk = tile_chunk_name(_tile(n))
-        assert (out / f"{chunk}.zip").is_file()
-        assert (out / f"{chunk}.json").is_file()

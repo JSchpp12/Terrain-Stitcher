@@ -1,18 +1,25 @@
+﻿"""Tests for the ortho prep stage (OrthoPrep) and its zip-in-memory handling.
+
+Covers ImageExtensionType / compareExtension, find_file over an extracted dir,
+and the end-to-end processOrthoImage path that reads a PNG straight from a
+zip archive in memory (no disk extraction) and writes the output PNG +
+sidecar JSON. The acquisition side (compress_tile_to_zip) feeds it a real
+fixture tile zipped under its original filename.
+"""
 from __future__ import annotations
 
-import zipfile
 from pathlib import Path
 
 from terrain_stitcher.arcgis.tile_info import TileInfo
 from terrain_stitcher.arcgis.tile_zip import compress_tile_to_zip
-from terrain_stitcher.common import World_Coordinates
+from terrain_stitcher.common import Bounds, World_Coordinates
 from terrain_stitcher.functions.OrthoPrep import (
     ImageExtensionType,
     OrthoTask,
     compareExtension,
     processOrthoImage,
 )
-from terrain_stitcher.sources import Bounds, ImageDataWriter
+from terrain_stitcher.sources import ImageDataWriter
 from terrain_stitcher.util import find_file
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "arcgis_cache"

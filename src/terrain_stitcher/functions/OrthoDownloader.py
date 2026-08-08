@@ -131,6 +131,7 @@ class OrthoDownloader(ArcGISDownloaderBase):
         timeout: int,
         num_workers: int,
         chunk_px: int,
+        skip_mosaic: bool = False,
     ) -> None:
         shape_area = ParseArea.fromJSONFile(shapefile_path)
         lat = shape_area.center.get_lat()
@@ -170,27 +171,30 @@ class OrthoDownloader(ArcGISDownloaderBase):
             print("No chunks downloaded successfully - aborting.")
             sys.exit(1)
 
-        print("Building mosaic...")
-        mosaic_path = build_mosaic(chunk_paths, tmp_dir)
+        if not skip_mosaic:
+            print("Building mosaic...")
+            mosaic_path = build_mosaic(chunk_paths, tmp_dir)
 
-        print(f"Tiling (zoom {zoom})...")
-        run_gdal2tiles(mosaic_path, outdir, zoom, xyz, resampling, processes, "none")
+            print(f"Tiling (zoom {zoom})...")
+            run_gdal2tiles(
+                mosaic_path, outdir, zoom, xyz, resampling, processes, "none"
+            )
 
-        if failed:
-            print(
-                f"\nCompleted with {len(failed)} failed chunk(s). "
-                f"Tiles written to: {outdir} ({'XYZ' if xyz else 'TMS'} numbering), "
-                f"but gaps exist where chunks failed.\n"
-                f"Temporary chunk files kept in {tmp_dir} -- re-run the same "
-                f"command to retry only the {len(failed)} failed chunk(s)."
-            )
-        else:
-            # all chunks succeeded -- safe to clean up temporary files
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            print(
-                f"Done. Tiles written to: {outdir} "
-                f"({'XYZ' if xyz else 'TMS'} numbering)"
-            )
+            if failed:
+                print(
+                    f"\nCompleted with {len(failed)} failed chunk(s). "
+                    f"Tiles written to: {outdir} ({'XYZ' if xyz else 'TMS'} numbering), "
+                    f"but gaps exist where chunks failed.\n"
+                    f"Temporary chunk files kept in {tmp_dir} -- re-run the same "
+                    f"command to retry only the {len(failed)} failed chunk(s)."
+                )
+            else:
+                # all chunks succeeded -- safe to clean up temporary files
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                print(
+                    f"Done. Tiles written to: {outdir} "
+                    f"({'XYZ' if xyz else 'TMS'} numbering)"
+                )
 
 
 def download_from_arcgis(
@@ -205,6 +209,7 @@ def download_from_arcgis(
     chunk_px,
     service: ImageryService | None = None,
     service_index: int | None = None,
+    skip_mosaic: bool = False,
 ):
     OrthoDownloader(service=service, service_index=service_index).run(
         shapefile_path=shapefile_path,
@@ -216,6 +221,7 @@ def download_from_arcgis(
         timeout=timeout,
         num_workers=num_workers,
         chunk_px=chunk_px,
+        skip_mosaic=skip_mosaic,
     )
 
 
@@ -231,6 +237,7 @@ def main(
     chunk_px: int = 256,
     service: ImageryService | None = None,
     service_index: int | None = None,
+    skip_mosaic: bool = False,
 ):
     download_from_arcgis(
         shapefile_path=shape_file,
@@ -244,4 +251,5 @@ def main(
         chunk_px=chunk_px,
         service=service,
         service_index=service_index,
+        skip_mosaic=skip_mosaic,
     )

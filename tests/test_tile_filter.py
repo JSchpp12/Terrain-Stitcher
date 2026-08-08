@@ -1,15 +1,24 @@
+﻿"""Tests for ShapeTileFilter (cache-CRS overlap test against a shape region).
+
+A tile is included when ANY part of it falls within the shape bounds
+(closed-interval overlap, so a shared edge/corner counts), not only when it
+is fully contained. Pinned to the perryville fixture (3 tiles at L23).
+"""
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
 
-from terrain_stitcher.arcgis.acquisition_import import ArcGisProAcquisitionSource
-from terrain_stitcher.arcgis.cache_xml import ArcGisCacheInfo
+from terrain_stitcher.arcgis.tile_bounds import TileBoundsCalculator
 from terrain_stitcher.arcgis.tile_filter import ShapeTileFilter
 from terrain_stitcher.arcgis.tile_info import TileInfo
-from terrain_stitcher.arcgis.tile_zip import tile_chunk_name
-from terrain_stitcher.common import ParseArea, World_Bounding_Box, World_Coordinates
+from terrain_stitcher.arcgis.tile_scheme import TileSchemeInfo
+from terrain_stitcher.common import (
+    ParseArea,
+    World_Bounding_Box,
+    World_Coordinates,
+)
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "arcgis_cache"
 CONF_XML = FIXTURE_DIR / "conf.xml"
@@ -19,7 +28,12 @@ ALL_LAYERS = FIXTURE_DIR / "_alllayers"
 
 @pytest.fixture
 def cache_info():
-    return ArcGisCacheInfo.from_xml(str(CONF_XML))
+    return TileSchemeInfo.from_arcgis_conf_xml(str(CONF_XML))
+
+
+@pytest.fixture
+def calculator(cache_info):
+    return TileBoundsCalculator(cache_info)
 
 
 def _tile(name: str) -> TileInfo:
@@ -70,48 +84,7 @@ def test_filter_unknown_level_raises(cache_info):
         f(bad)
 
 
-# --- acquire wiring --------------------------------------------------------
-
-
-def test_acquire_with_shape_includes_only_overlapping_tiles(tmp_path):
-    src = ArcGisProAcquisitionSource.from_cache_dir(str(FIXTURE_DIR))
-    out = tmp_path / "out"
-    src.acquire(str(SHAPE_JSON), str(out), str(FIXTURE_DIR))
-
-    for n in ["C00075f6b.png", "C00075f6c.png", "C00075f6d.png"]:
-        chunk = tile_chunk_name(_tile(n))
-        assert (out / f"{chunk}.zip").is_file()
-        assert (out / f"{chunk}.json").is_file()
-
-
-def test_acquire_with_far_shape_excludes_all(tmp_path):
-    far_shape = tmp_path / "far.json"
-    # New Shape.json format: x/y (floats) plus legacy lat/lon strings.
-    far_shape.write_text('{"boundsType":"POINT","center":{"lat":"0.0","lon":"0.0","x":0.0,"y":0.0}}')
-
-    src = ArcGisProAcquisitionSource.from_cache_dir(str(FIXTURE_DIR))
-    out = tmp_path / "out"
-    src.acquire(str(far_shape), str(out), str(FIXTURE_DIR))
-
-    assert not list(out.glob("*.zip"))
-    assert not list(out.glob("*.json"))
-
-
-def test_acquire_without_shape_processes_all(tmp_path):
-    src = ArcGisProAcquisitionSource.from_cache_dir(str(FIXTURE_DIR))
-    out = tmp_path / "out"
-    src.acquire(None, str(out), str(FIXTURE_DIR))
-
-    for n in ["C00075f6b.png", "C00075f6c.png", "C00075f6d.png"]:
-        chunk = tile_chunk_name(_tile(n))
-        assert (out / f"{chunk}.zip").is_file()
-        assert (out / f"{chunk}.json").is_file()
-from terrain_stitcher.arcgis.tile_bounds import TileBoundsCalculator
-
-
-@pytest.fixture
-def calculator(cache_info):
-    return TileBoundsCalculator(cache_info)
+# --- partial / full / gap overlap semantics -------------------------------
 
 
 def _box(ll_lat, ll_lon, ur_lat, ur_lon):
@@ -138,7 +111,9 @@ def test_filter_includes_partially_overlapping_tile(cache_info, calculator):
 
 def test_filter_includes_tile_fully_inside_shape(cache_info, calculator):
     sw, ne, c = _corners(calculator, "C00075f6b.png")
-    shape = _box(sw.get_lat() - 1.0, sw.get_lon() - 1.0, ne.get_lat() + 1.0, ne.get_lon() + 1.0)
+    shape = _box(
+        sw.get_lat() - 1.0, sw.get_lon() - 1.0, ne.get_lat() + 1.0, ne.get_lon() + 1.0
+    )
     f = ShapeTileFilter(cache_info, shape)
     assert f(_tile("C00075f6b.png")) is True
 
@@ -149,4 +124,3 @@ def test_filter_excludes_tile_separated_by_gap(cache_info, calculator):
     shape = _box(sw.get_lat(), ne.get_lon() + 0.001, ne.get_lat(), ne.get_lon() + 0.002)
     f = ShapeTileFilter(cache_info, shape)
     assert f(_tile("C00075f6b.png")) is False
-

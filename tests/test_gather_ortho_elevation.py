@@ -1,11 +1,12 @@
-"""Tests for gather-ortho's elevation GeoTIFF handling.
+﻿"""Tests for gather-ortho's elevation GeoTIFF handling (import_from_arcgis_dir
+with -e / elevation_data_dir).
 
-gather-ortho --source arcgis -e used to copy every elevation GeoTIFF into the
-output. It now reuses the prep-geo merge -- clip each tile to the shape AOI and
-composite the intersecting tiles into one continuous EPSG:4326 GeoTIFF -- and
-records that single merged file under height_info.json["elevation_files"]. An
-empty elevation directory, or a region no tile intersects, must fail loudly so
-the user is forced to supply coverage.
+gather-ortho --source arcgis -e reuses the prep-geo merge -- clip each tile
+to the shape AOI and composite the intersecting tiles into one continuous
+EPSG:4326 GeoTIFF -- and records that single merged file under
+height_info.json["elevation_files"]. An empty elevation directory, or a
+region no tile intersects, must fail loudly so the user is forced to supply
+coverage.
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ from rasterio.transform import from_origin
 
 from terrain_stitcher.functions.ArcGisImporter import (
     _merge_elevation_into_output,
-    import_from_arcgis,
+    import_from_arcgis_dir,
 )
 from terrain_stitcher.util import write_star_ignore_marker
 
@@ -67,7 +68,7 @@ def test_gather_ortho_elevation_merges_into_single_tif(tmp_path):
     elev_dir = _write_perryville_elevation(tmp_path / "elevation")
     out = tmp_path / "out"
 
-    groups = import_from_arcgis(
+    groups = import_from_arcgis_dir(
         shape_file=str(SHAPE_JSON),
         cache_dir=str(FIXTURE),
         output_dir=str(out),
@@ -111,7 +112,7 @@ def test_gather_ortho_elevation_requires_shape(tmp_path):
     elev_dir = _write_perryville_elevation(tmp_path / "elevation")
     out = tmp_path / "out"
     with pytest.raises(Exception, match="requires --shape/-s"):
-        import_from_arcgis(
+        import_from_arcgis_dir(
             shape_file=None,
             cache_dir=str(FIXTURE),
             output_dir=str(out),

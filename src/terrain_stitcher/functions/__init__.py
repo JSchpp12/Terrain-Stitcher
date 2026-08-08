@@ -1,4 +1,4 @@
-from .OrthoScraper import main as main_ortho
+﻿from .OrthoScraper import main as main_ortho
 from .ShapeGenerator import main as main_shape
 from .OrthoPrep import main as main_prep_ortho
 from .ArcGisImporter import import_from_arcgis_dir as main_ortho_arcgis_import
@@ -10,3 +10,4 @@ from .ElevationGeoPrep import main as main_prep_geo
 from .OrthoStitcher import main as main_stitch_ortho
 from .OrthoDownloader import main as main_arcgis_downloader
 from .ElevationDownloader import main_elevation
+from .FullPass import main_process_terrain

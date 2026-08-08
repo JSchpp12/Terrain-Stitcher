@@ -7,6 +7,7 @@ from terrain_stitcher.stitching.grid_functions import (
 from typing import Optional
 from PIL import Image as pImage, UnidentifiedImageError
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from tqdm import tqdm
 from terrain_stitcher.stitching import GatheredTiles, ManifestReader
 from terrain_stitcher.common import World_Coordinates, get_all_files_in_directory
 import json
@@ -16,6 +17,7 @@ from terrain_stitcher.arcgis.acquisition_source import ArcGisProAcquisitionSourc
 from terrain_stitcher.arcgis.tile_info import TileInfo
 from terrain_stitcher.common import Tile, TileSide
 import os
+import shutil
 
 
 def _buildGroup(

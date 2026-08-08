@@ -7,18 +7,22 @@ from typing import List, Optional
 
 from tqdm import tqdm
 from terrain_stitcher.arcgis.tile_scheme import TileSchemeInfo
-from terrain_stitcher.arcgis.tile_files import discover_row_dirs, gather_tile_files
+from terrain_stitcher.arcgis.tile_files import (
+    all_layers_path,
+    discover_row_dirs,
+    gather_tile_files,
+)
 from terrain_stitcher.arcgis.tile_filter import ShapeTileFilter
 from terrain_stitcher.common import ParseArea
 from terrain_stitcher.sources.acquisition import AcquisitionSource
 
 from abc import ABC, abstractmethod
 
+from terrain_stitcher.arcgis import tile_worker
 from terrain_stitcher.arcgis.tile_worker import (
     _init_worker,
     _process_tiles,
     _discover_row_survivors,
-    _WORKER_CACHE,
 )
 
 
@@ -36,7 +40,7 @@ def _process_row_worker(row_dir: str) -> tuple[int, int, int]:
     directory path is sent in and three ints come back, so IPC is negligible
     regardless of how many tiles the row contains.
     """
-    tile_paths = gather_tile_files(row_dir, _WORKER_CACHE.cache_tile_format)
+    tile_paths = gather_tile_files(row_dir, tile_worker._WORKER_CACHE.cache_tile_format)
     if not tile_paths:
         return (0, 0, 0)
 
@@ -312,11 +316,15 @@ class ArcGisProAcquisitionSource(AcquisitionSource):
         out_path = Path(output_dir)
         out_path.mkdir(parents=True, exist_ok=True)
 
+        # input_dir is the cache root (conf.xml + _alllayers); the row
+        # discovery + per-tile path helpers operate on the _alllayers dir,
+        # so resolve it once here.
+        all_layers_dir = all_layers_path(input_dir)
         # Enumerate row directories once (cheap: directory listing only). The
         # per-row walk that materialises tile paths happens inside the workers.
-        row_dirs = discover_row_dirs(input_dir)
+        row_dirs = discover_row_dirs(all_layers_dir)
         if not row_dirs:
-            print(f"No tile rows found under {input_dir}; nothing to process.")
+            print(f"No tile rows found under {all_layers_dir}; nothing to process.")
             return
 
         print(f"Discovered {len(row_dirs)} row directory(s) across all levels.")
@@ -341,7 +349,7 @@ class ArcGisProAcquisitionSource(AcquisitionSource):
                 initargs=(
                     self.cache_info,
                     box,
-                    str(input_dir),
+                    str(all_layers_dir),
                     str(out_path),
                     self.extract_function,
                 ),

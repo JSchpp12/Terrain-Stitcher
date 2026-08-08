@@ -1,4 +1,5 @@
-﻿"""Integration tests for the folded ArcGIS import path (stitch_arcgis_import).
+﻿"""Integration tests for the folded ArcGIS cache import path
+(import_from_arcgis_dir).
 
 This path merges the old gather-ortho --source arcgis -> prep-ortho ->
 stitch-ortho chain into one pass over the cache: the cache native (row, col)
@@ -15,9 +16,7 @@ from pathlib import Path
 import pytest
 from PIL import Image as pImage
 
-from terrain_stitcher.functions.ArcGisImporter import (
-    import_from_arcgis,
-)
+from terrain_stitcher.functions.ArcGisImporter import import_from_arcgis_dir
 
 FIXTURE = Path(__file__).parent / "fixtures" / "arcgis_cache"
 ALL_LAYERS = FIXTURE / "_alllayers"
@@ -26,11 +25,12 @@ CONF_XML = FIXTURE / "conf.xml"
 
 def test_stitch_arcgis_import_dimension_one_emits_one_image_per_tile(tmp_path):
     out = tmp_path / "out"
-    groups = import_from_arcgis(
+    groups = import_from_arcgis_dir(
         shape_file=None,
         cache_dir=str(FIXTURE),
         output_dir=str(out),
         dimension=1,
+        workers=1,
     )
     # 3 tiles, dimension=1 -> 3 one-tile groups.
     assert len(groups) == 3
@@ -52,11 +52,12 @@ def test_stitch_arcgis_import_dimension_one_emits_one_image_per_tile(tmp_path):
 
 def test_stitch_arcgis_import_dimension_two_partitions_windows(tmp_path):
     out = tmp_path / "out"
-    groups = import_from_arcgis(
+    groups = import_from_arcgis_dir(
         shape_file=None,
         cache_dir=str(FIXTURE),
         output_dir=str(out),
         dimension=2,
+        workers=1,
     )
     # 3 tiles in one row: window cols 0-1 (2 tiles) + window cols 2-3 (1 tile).
     assert len(groups) == 2
@@ -65,12 +66,13 @@ def test_stitch_arcgis_import_dimension_two_partitions_windows(tmp_path):
 
 def test_stitch_arcgis_import_lod_selects_requested_level(tmp_path):
     out = tmp_path / "out"
-    groups = import_from_arcgis(
+    groups = import_from_arcgis_dir(
         shape_file=None,
         cache_dir=str(FIXTURE),
         output_dir=str(out),
         dimension=1,
         lod=23,
+        workers=1,
     )
     assert len(groups) == 3
 
@@ -78,28 +80,31 @@ def test_stitch_arcgis_import_lod_selects_requested_level(tmp_path):
 def test_stitch_arcgis_import_lod_missing_raises(tmp_path):
     out = tmp_path / "out"
     with pytest.raises(ValueError, match="No surviving tiles at LOD 99"):
-        import_from_arcgis(
+        import_from_arcgis_dir(
             shape_file=None,
             cache_dir=str(FIXTURE),
             output_dir=str(out),
             dimension=1,
             lod=99,
+            workers=1,
         )
 
 
 def test_stitch_arcgis_import_resume_is_idempotent(tmp_path):
     out = tmp_path / "out"
-    import_from_arcgis(
-        shape_file=None, cache_dir=str(FIXTURE), output_dir=str(out), dimension=1
+    import_from_arcgis_dir(
+        shape_file=None, cache_dir=str(FIXTURE), output_dir=str(out),
+        dimension=1, workers=1,
     )
     first = {p.name: p.stat().st_size for p in out.iterdir() if p.suffix == ".png"}
     # Re-run with resume=True: existing groups are skipped, output unchanged.
-    import_from_arcgis(
+    import_from_arcgis_dir(
         shape_file=None,
         cache_dir=str(FIXTURE),
         output_dir=str(out),
         dimension=1,
         resume=True,
+        workers=1,
     )
     second = {p.name: p.stat().st_size for p in out.iterdir() if p.suffix == ".png"}
     assert first == second
