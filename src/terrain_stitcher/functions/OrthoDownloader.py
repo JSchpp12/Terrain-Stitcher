@@ -28,21 +28,41 @@ def pixel_size_for_zoom(zoom: int) -> float:
     return earth_circumference_m / (256 * 2**zoom)
 
 
-def assert_lod_within_native(zoom: int, service: ImageryService) -> None:
-    """Raise ``ValueError`` if ``zoom`` implies a finer resolution than
-    the service's native cell size.
+def native_lod_for_service(service: ImageryService) -> int:
+    """The integer Web Mercator LOD closest to the service's native cell size.
 
-    The source cannot produce real detail below its native cell size, so
-    fetching at a finer LOD would only bake interpolated pixels into the
-    cache via gdal2tiles upscaling. There is deliberately no override:
-    request a lower LOD instead.
+    A service's native resolution (m/px) rarely matches the exact Web Mercator
+    resolution at any integer LOD: it is either declared statically as a round
+    number (e.g. USGS NAIP Plus at 0.3 m/px) or derived from ArcGIS's tileInfo
+    LOD table, which uses a slightly different earth-radius constant than
+    :func:`pixel_size_for_zoom`. Comparing the raw m/px values is therefore too
+    strict -- a service that is "~LOD 19" (0.3 m/px vs the exact 0.29858 m/px)
+    would reject LOD 19 itself. Rounding the equivalent LOD to the nearest
+    integer absorbs that constant/rounding mismatch so the maximum LOD the
+    service actually provides is accepted.
     """
-    zoom_res = pixel_size_for_zoom(zoom)
-    if zoom_res < service.native_pixel_size_m:
+    return round(math.log2(pixel_size_for_zoom(0) / service.native_pixel_size_m))
+
+
+def assert_lod_within_native(zoom: int, service: ImageryService) -> None:
+    """Raise ``ValueError`` if ``zoom`` is finer than the service's native
+    level of detail.
+
+    The comparison is performed in LOD space (see
+    :func:`native_lod_for_service`) rather than on raw floating-point m/px, so
+    a service whose native cell size is fractionally coarser than the exact
+    Web Mercator resolution at its nominal LOD (e.g. 0.3 m/px, which is ~LOD
+    19 but slightly coarser than the exact 0.29858 m/px) still accepts that
+    LOD -- it is the maximum the service provides. Only a requested zoom
+    strictly above the native LOD is rejected; finer than that would only bake
+    interpolated pixels into the cache via gdal2tiles upscaling. There is
+    deliberately no override: request a lower LOD instead.
+    """
+    native_lod = native_lod_for_service(service)
+    if zoom > native_lod:
         raise ValueError(
-            f"LOD {zoom} implies {zoom_res:.4f} m/px, but {service.key} "
-            f"native resolution is {service.native_pixel_size_m:.4f} m/px "
-            f"(~LOD {round(math.log2(156543.0339 / service.native_pixel_size_m), 1)}). "
+            f"LOD {zoom} is finer than {service.key} native resolution "
+            f"({service.native_pixel_size_m:.4f} m/px, ~LOD {native_lod}). "
             f"Request a lower LOD; the service has no real detail below "
             f"its native cell size."
         )
@@ -166,6 +186,9 @@ class OrthoDownloader(ArcGISDownloaderBase):
         chunk_paths, failed = self.download_chunks(
             service, chunks, tmp_dir, timeout, num_workers
         )
+        # The chunk-index dicts are no longer needed; drop them before the
+        # memory-heavy gdal2tiles pass so they can be reclaimed.
+        del chunks
 
         if not chunk_paths:
             print("No chunks downloaded successfully - aborting.")

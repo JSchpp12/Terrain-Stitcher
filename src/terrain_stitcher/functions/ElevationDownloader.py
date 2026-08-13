@@ -91,6 +91,9 @@ class ElevationDownloader(ArcGISDownloaderBase):
         chunk_paths, failed = self.download_chunks(
             service, chunks, tmp_dir, timeout, num_workers
         )
+        # The chunk-index dicts are no longer needed; drop them before the
+        # memory-heavy mosaic + translate pass so they can be reclaimed.
+        del chunks
 
         if not chunk_paths:
             print("No elevation chunks downloaded successfully - aborting.")

@@ -113,6 +113,26 @@ def test_assert_lod_within_native_allows_coarser_and_equal_lod():
     assert assert_lod_within_native(19, ALASKA) is None
 
 
+def test_assert_lod_within_native_allows_nominal_lod_for_rounded_native():
+    """A service whose native cell size is fractionally coarser than the
+    exact Web Mercator resolution at its nominal LOD must still accept that
+    LOD. USGS NAIP Plus declares 0.3 m/px, which is ~LOD 19 (the exact Web
+    Mercator resolution at LOD 19 is 0.29858 m/px); the old raw-m/px check
+    rejected LOD 19 even though it is the maximum the service provides."""
+    from terrain_stitcher.functions.OrthoDownloader import (
+        assert_lod_within_native,
+        native_lod_for_service,
+    )
+
+    assert native_lod_for_service(NAIPPLUS) == 19
+    # LOD 19 is the nominal maximum for a 0.3 m/px service -> must not raise.
+    assert assert_lod_within_native(19, NAIPPLUS) is None
+    # One LOD above the native LOD is still rejected.
+    with pytest.raises(ValueError, match="native resolution"):
+        assert_lod_within_native(20, NAIPPLUS)
+
+
+
 def test_download_arcgis_rejects_lod_above_native(monkeypatch, tmp_path):
     """download_from_arcgis must fail fast (before any network/disk) when the
     requested LOD is finer than the service native resolution."""
