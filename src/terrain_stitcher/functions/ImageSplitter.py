@@ -36,6 +36,7 @@ import json
 import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
 from typing import Optional
 
 import pyproj
@@ -338,9 +339,10 @@ def main(
         for src, dest in copy_specs:
             futures[pool.submit(_copy_file, src, dest)] = dest
 
-        # Wait for all to complete; raise on first failure
-        for fut in as_completed(futures):
-            fut.result()
+        with tqdm(total=len(futures), desc="Writing output", unit="file") as pbar:
+            for fut in as_completed(futures):
+                fut.result()
+                pbar.update(1)
 
     # Write the new manifest (after all files are on disk)
     manifest_path = _save_manifest(output_dir, new_manifest)
