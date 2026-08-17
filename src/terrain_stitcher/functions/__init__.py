@@ -11,3 +11,4 @@ from .OrthoStitcher import main as main_stitch_ortho
 from .OrthoDownloader import main as main_arcgis_downloader
 from .ElevationDownloader import main_elevation
 from .FullPass import main_process_terrain
+from .ImageSplitter import main as main_split_image

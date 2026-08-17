@@ -12,6 +12,7 @@ from terrain_stitcher.functions import (
     main_stitch_ortho,
     main_arcgis_downloader,
     main_elevation,
+    main_split_image,
 )
 
 
@@ -941,6 +942,76 @@ def addProcessTerrainArgs(subparser):
     )
 
 
+def addSplitImageArgs(subparser):
+    parserGenerate = subparser.add_parser(
+        "split-image",
+        help=(
+            "Split a single gathered terrain image in half (no resizing) "
+            "and update height_info.json"
+        ),
+        description=(
+            "Takes one gathered_r*_c*.png from a terrain output directory "
+            "(produced by gather-ortho -src arcgis or process-terrain), splits "
+            "it in half along its longer pixel dimension (pure crop, no "
+            "resizing), and writes the two halves plus an updated "
+            "height_info.json to a new output directory. All sibling files "
+            "(other gathered PNGs, elevation_merged.tif, Shape.json, sidecars) "
+            "are copied to the output so it stays self-contained. The bounds "
+            "for each half are computed in Web Mercator (EPSG:3857) because "
+            "image pixels are linearly spaced in projected space, not in "
+            "WGS84 lat/lon -- a naive arithmetic latitude midpoint would "
+            "georeference the split images incorrectly."
+        ),
+    )
+
+    parserGenerate.add_argument(
+        "-i",
+        "--image",
+        required=True,
+        help=(
+            "Path to the single gathered_r*_c*.png image to split. The "
+            "image must be listed in the height_info.json manifest in the "
+            "same directory."
+        ),
+    )
+    parserGenerate.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        help=(
+            "Directory to write the two new images, the updated "
+            "height_info.json, and copies of all sibling files. Created if "
+            "it does not exist. The original image and manifest are left "
+            "untouched."
+        ),
+    )
+    parserGenerate.add_argument(
+        "--axis",
+        choices=["auto", "vertical", "horizontal"],
+        default="auto",
+        help=(
+            "Split axis (default: auto). 'auto' splits along the longer "
+            "pixel dimension (a wide image splits left/right, a tall image "
+            "splits top/bottom). 'vertical' always splits into left/right "
+            "halves (dividing longitude). 'horizontal' always splits into "
+            "top/bottom halves (dividing latitude)."
+        ),
+    )
+    parserGenerate.add_argument(
+        "-w",
+        "--workers",
+        type=int,
+        default=None,
+        help=(
+            "Number of worker threads for the parallel PNG encode/save of the "
+            "two image halves and the copy of sibling files (default: "
+            "os.cpu_count()). PNG encoding releases the GIL so the two halves "
+            "encode concurrently; file copies are I/O-bound. Lower this if "
+            "memory or disk I/O is constrained."
+        ),
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="TerrainStitcher",
@@ -964,6 +1035,7 @@ def main():
     addStitchOrthoArgs(subparser)
     addPrepGeoArgs(subparser)
     addProcessTerrainArgs(subparser)
+    addSplitImageArgs(subparser)
 
     args = parser.parse_args()
 
@@ -1103,6 +1175,13 @@ def main():
             timeout=args.timeout,
             resampling=args.resampling,
             service_index=args.service_index,
+        )
+    elif args.command == "split-image":
+        main_split_image(
+            image_path=args.image,
+            output_dir=args.output,
+            axis=args.axis,
+            workers=args.workers,
         )
     else:
         print("Unknown command type")
