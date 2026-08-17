@@ -575,3 +575,26 @@ class TestThreading:
         main(str(src), str(out), workers=4)
         tmp_files = [f for f in os.listdir(out) if f.endswith(".tmp")]
         assert tmp_files == []
+
+    def test_large_image_not_rejected_by_bomb_guard(self, tmp_path):
+        """PIL's DecompressionBombError guard is disabled so that large
+        terrain images (hundreds of millions of pixels) can be opened and
+        split. This is the whole point of the tool."""
+        import PIL.Image
+        # The guard should be disabled by the module import
+        assert PIL.Image.MAX_IMAGE_PIXELS is None
+
+        # Create a large image (200M pixels) and verify it opens + splits
+        src = tmp_path / "src"
+        out = tmp_path / "out"
+        entries = [_entry("gathered_r0_c0", 40.0, 39.0, -82.0, -81.0)]
+        _make_terrain_dir(src, entries,
+                         image_sizes={"gathered_r0_c0": (20000, 10000)})
+        # 20000x10000 = 200,000,000 pixels > 178,956,970 default limit
+        result = main(str(src), str(out), axis="vertical")
+        assert result["split_count"] == 1
+        with pImage.open(out / "gathered_r0_c0_a.png") as im:
+            assert im.size == (10000, 10000)
+        with pImage.open(out / "gathered_r0_c0_b.png") as im:
+            assert im.size == (10000, 10000)
+

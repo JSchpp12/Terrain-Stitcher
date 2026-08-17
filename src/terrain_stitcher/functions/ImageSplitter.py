@@ -39,6 +39,14 @@ from typing import Optional
 
 import pyproj
 from PIL import Image as pImage
+
+# The images this tool splits are final gathered terrain outputs (produced by
+# gather-ortho / process-terrain) that are intentionally large -- the whole point
+# is to split them because they exceed downstream size limits. PIL's default
+# decompression-bomb guard (178,956,970 px) rejects these as a DOS protection,
+# so we disable it. Every image opened here is a local file the user explicitly
+# asked to process, not untrusted external input.
+pImage.MAX_IMAGE_PIXELS = None
 from tqdm import tqdm
 
 from terrain_stitcher.common import get_all_files_in_directory
@@ -420,3 +428,4 @@ def main(
         "manifest_path": manifest_path,
         "num_workers": num_workers,
     }
+
