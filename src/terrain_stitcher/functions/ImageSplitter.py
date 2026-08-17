@@ -1,26 +1,25 @@
-﻿"""Split a single gathered terrain image in half and update its manifest.
+﻿"""Split every gathered terrain image in a directory in half and update the
+manifest.
 
-Takes one ``gathered_r*_c*.png`` from a terrain output directory (produced by
-``gather-ortho -src arcgis`` or ``process-terrain``), splits it in half along
-its longer pixel dimension (no resizing — pure crop), and writes the two
-halves plus an updated ``height_info.json`` to a new output directory. All
-sibling files (other gathered PNGs, ``elevation_merged.tif``, ``Shape.json``,
-sidecars) are copied to the output so it stays self-contained.
+Takes a terrain output directory (produced by ``gather-ortho -src arcgis`` or
+``process-terrain``) containing ``gathered_r*_c*.png`` images plus a
+``height_info.json`` manifest, splits every listed image in half along its
+longer pixel dimension (no resizing — pure crop), and writes the split halves
+plus an updated ``height_info.json`` to a new output directory. All non-image
+sibling files (``elevation_merged.tif``, ``Shape.json``, sidecars) are copied
+to the output so it stays self-contained.
 
-The image save (PNG encode) and sibling-file copy steps are parallelised with
-a ``ThreadPoolExecutor``: PNG encoding releases the GIL, so the two halves
-encode concurrently, and file copies are I/O-bound. The thread count defaults
-to ``os.cpu_count()`` and is capped by the amount of work available.
+Each image is split in its own worker thread (``ThreadPoolExecutor``), so all
+images in the directory are split concurrently. PNG encoding releases the GIL,
+so the halves from different images encode simultaneously. The main thread
+collects all split results and writes the single updated manifest after every
+worker finishes — the manifest is never touched by worker threads.
 
 The bounds for each half are computed in Web Mercator (EPSG:3857) because
 image pixels are linearly spaced in projected space, not in WGS84 lat/lon:
 
   * **Vertical split** (left/right, dividing longitude): longitude is linear
-    with Web Mercator X, so the pixel midpoint is exactly ``(west + east) / 2``
-    in degrees. No reprojection needed for the longitude split, but we still
-    reproject the new corners so the latitudes stay exact (the latitude of the
-    NW and NE corners is the same for an axis-aligned Web Mercator rectangle,
-    so this is effectively a no-op for latitude — included for uniformity).
+    with Web Mercator X, so the pixel midpoint is exactly ``(west + east) / 2``.
 
   * **Horizontal split** (top/bottom, dividing latitude): latitude is
     **non-linear** with Web Mercator Y. The pixel midpoint in projected space
@@ -36,13 +35,17 @@ import json
 import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from tqdm import tqdm
 from typing import Optional
 
 import pyproj
 from PIL import Image as pImage
+from tqdm import tqdm
 
 from terrain_stitcher.common import get_all_files_in_directory
+
+# ---------------------------------------------------------------------------
+# Axis helpers
+# ---------------------------------------------------------------------------
 
 _AXIS_AUTO = "auto"
 _AXIS_VERTICAL = "vertical"  # left / right (split longitude)
@@ -65,6 +68,11 @@ def _resolve_axis(width: int, height: int, axis: str) -> str:
     if height > width:
         return _AXIS_HORIZONTAL
     return _AXIS_VERTICAL
+
+
+# ---------------------------------------------------------------------------
+# Image splitting (crop only, no resizing)
+# ---------------------------------------------------------------------------
 
 
 def _split_image(img: pImage.Image, axis: str) -> tuple[pImage.Image, pImage.Image]:
@@ -95,6 +103,11 @@ def _split_image(img: pImage.Image, axis: str) -> tuple[pImage.Image, pImage.Ima
     first.load()
     second.load()
     return first, second
+
+
+# ---------------------------------------------------------------------------
+# Bounds splitting (Web Mercator for correctness)
+# ---------------------------------------------------------------------------
 
 
 def _build_bounds_dict(
@@ -159,6 +172,10 @@ def _split_bounds(bounds_dict: dict, axis: str) -> tuple[dict, dict]:
     return first, second
 
 
+# ---------------------------------------------------------------------------
+# Manifest handling
+# ---------------------------------------------------------------------------
+
 _MANIFEST_NAME = "height_info.json"
 
 
@@ -169,7 +186,7 @@ def _load_manifest(source_dir: str) -> dict:
         raise FileNotFoundError(
             f"{_MANIFEST_NAME} not found in {source_dir!r}. The split-image "
             "command expects a terrain output directory containing the "
-            "manifest alongside the image."
+            "manifest alongside the images."
         )
     with open(manifest_path) as f:
         return json.load(f)
@@ -185,6 +202,11 @@ def _save_manifest(output_dir: str, data: dict) -> str:
     return manifest_path
 
 
+# ---------------------------------------------------------------------------
+# Worker: split one image (runs in a thread)
+# ---------------------------------------------------------------------------
+
+
 def _save_image_atomic(img: pImage.Image, out_path: str) -> str:
     """Save *img* to *out_path* via temp-then-replace (atomic on volume).
 
@@ -198,166 +220,203 @@ def _save_image_atomic(img: pImage.Image, out_path: str) -> str:
     return out_path
 
 
-def _copy_file(src_path: str, dest_path: str) -> str:
-    """Copy *src_path* to *dest_path* preserving metadata."""
-    shutil.copy2(src_path, dest_path)
-    return dest_path
-
-
-def main(
+def _split_one_image(
     image_path: str,
+    image_stem: str,
+    bounds_dict: dict,
     output_dir: str,
-    axis: str = _AXIS_AUTO,
-    workers: Optional[int] = None,
+    axis: str,
 ) -> dict:
-    """Split a single gathered terrain image in half and write the results.
+    """Split one image in half and save the two halves. Worker function.
 
-    The PNG encode/save of the two halves and the copy of all sibling files
-    are dispatched to a ``ThreadPoolExecutor`` so they run concurrently. PNG
-    encoding releases the GIL (the two halves encode simultaneously) and file
-    copies are I/O-bound, so threads are the right concurrency model here —
-    no process-pool IPC overhead.
+    Loads the image, crops it into two halves (no resizing), computes the new
+    bounds for each half in Web Mercator, and saves both halves atomically to
+    *output_dir*. Returns the metadata the main thread needs to update the
+    manifest: original name, resolved axis, and the two new entries (name +
+    bounds) that replace the original.
 
-    Parameters
-    ----------
-    image_path
-        Path to the ``gathered_r*_c*.png`` image to split.
-    output_dir
-        Directory to write the two new images + updated ``height_info.json``
-        and copies of all sibling files. Created if it does not exist.
-    axis
-        Split axis: ``"auto"`` (default; splits along the longer pixel
-        dimension), ``"vertical"`` (left/right), or ``"horizontal"``
-        (top/bottom).
-    workers
-        Number of worker threads for the save + copy I/O (default:
-        ``os.cpu_count()``). Each task is one image save or one file copy;
-        the pool is sized to ``min(workers, n_tasks)`` so idle threads are
-        never created.
-
-    Returns
-    -------
-    dict
-        Summary with keys: ``original_name``, ``axis``, ``first``,
-        ``second``, ``manifest_path``.
+    This is designed to run inside a ``ThreadPoolExecutor`` worker: it is
+    fully self-contained (no shared mutable state), and the PNG encode inside
+    ``_save_image_atomic`` releases the GIL so multiple workers encode their
+    halves simultaneously.
     """
-    if axis not in _VALID_AXES:
-        raise ValueError(f"axis must be one of {_VALID_AXES!r}, got {axis!r}")
-    if not os.path.isfile(image_path):
-        raise FileNotFoundError(f"Image not found: {image_path!r}")
-
-    source_dir = os.path.dirname(os.path.abspath(image_path))
-    image_basename = os.path.basename(image_path)
-    # Stem without extension (e.g. "gathered_r0_c0" from "gathered_r0_c0.png")
-    image_stem = os.path.splitext(image_basename)[0]
-
-    # --- Load the image and determine the split axis -------------------------
     with pImage.open(image_path) as img:
         width, height = img.size
         resolved_axis = _resolve_axis(width, height, axis)
         first_img, second_img = _split_image(img, resolved_axis)
     # img is now closed; first_img/second_img are .load()-ed and independent
 
-    # --- Load the manifest and find this image's entry -----------------------
-    manifest = _load_manifest(source_dir)
-
-    original_entry = None
-    remaining_entries = []
-    for entry in manifest.get("images", []):
-        if entry["name"] == image_stem:
-            original_entry = entry
-        else:
-            remaining_entries.append(entry)
-
-    if original_entry is None:
-        raise ValueError(
-            f"Image {image_stem!r} not found in {_MANIFEST_NAME}. The manifest "
-            "must list the image being split."
-        )
-
-    # --- Compute new bounds for each half ------------------------------------
-    first_bounds, second_bounds = _split_bounds(original_entry["bounds"], resolved_axis)
+    first_bounds, second_bounds = _split_bounds(bounds_dict, resolved_axis)
 
     first_name = image_stem + "_a"
     second_name = image_stem + "_b"
 
-    first_entry = {"name": first_name, "bounds": first_bounds}
-    second_entry = {"name": second_name, "bounds": second_bounds}
+    _save_image_atomic(first_img, os.path.join(output_dir, first_name + ".png"))
+    _save_image_atomic(second_img, os.path.join(output_dir, second_name + ".png"))
 
-    # Build the new manifest: original entry replaced by the two halves,
-    # position preserved (other entries keep their order).
-    new_images = []
-    inserted = False
-    for entry in manifest.get("images", []):
-        if entry["name"] == image_stem:
-            new_images.append(first_entry)
-            new_images.append(second_entry)
-            inserted = True
+    return {
+        "original_name": image_stem,
+        "resolved_axis": resolved_axis,
+        "first_name": first_name,
+        "first_bounds": first_bounds,
+        "second_name": second_name,
+        "second_bounds": second_bounds,
+        "first_size": first_img.size,
+        "second_size": second_img.size,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Main entrypoint
+# ---------------------------------------------------------------------------
+
+
+def main(
+    input_dir: str,
+    output_dir: str,
+    axis: str = _AXIS_AUTO,
+    workers: Optional[int] = None,
+) -> dict:
+    """Split every gathered image in a directory in half and update the manifest.
+
+    Scans *input_dir* for images listed in its ``height_info.json`` manifest,
+    splits each one in half (no resizing — pure crop) in a separate worker
+    thread, and writes the split halves plus an updated manifest to
+    *output_dir*. Non-image sibling files are copied through. The manifest is
+    written once by the main thread after every worker finishes — worker
+    threads never touch the manifest.
+
+    Parameters
+    ----------
+    input_dir
+        Terrain output directory containing ``gathered_r*_c*.png`` images and
+        a ``height_info.json`` manifest.
+    output_dir
+        Directory to write the split images, updated ``height_info.json``, and
+        copies of all sibling files. Created if it does not exist.
+    axis
+        Split axis: ``"auto"`` (default; each image splits along its own
+        longer pixel dimension), ``"vertical"`` (left/right), or
+        ``"horizontal"`` (top/bottom).
+    workers
+        Number of worker threads — one per image being split (default:
+        ``os.cpu_count()``). PNG encoding releases the GIL, so the halves
+        from different images encode concurrently. The pool is sized to
+        ``min(workers, n_images)`` so idle threads are never created.
+
+    Returns
+    -------
+    dict
+        Summary with keys: ``split_count``, ``total_images``,
+        ``manifest_path``, ``num_workers``.
+    """
+    if axis not in _VALID_AXES:
+        raise ValueError(f"axis must be one of {_VALID_AXES!r}, got {axis!r}")
+    if not os.path.isdir(input_dir):
+        raise FileNotFoundError(f"Input directory not found: {input_dir!r}")
+
+    # --- Read the manifest ---------------------------------------------------
+    manifest = _load_manifest(input_dir)
+    manifest_entries = manifest.get("images", [])
+
+    # Partition manifest entries into those whose PNG exists (split) and
+    # those without a PNG on disk (pass through unchanged).
+    split_specs: list[tuple[str, str, dict]] = []
+    passthrough_entries: list[dict] = []
+    split_basenames: set[str] = set()
+    for entry in manifest_entries:
+        name = entry["name"]
+        png_path = os.path.join(input_dir, name + ".png")
+        if os.path.isfile(png_path):
+            split_specs.append((png_path, name, entry["bounds"]))
+            split_basenames.add(name + ".png")
+        else:
+            passthrough_entries.append(entry)
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    if not split_specs:
+        print("No images to split (no manifest entries with matching PNGs).")
+    else:
+        print(
+            f"Splitting {len(split_specs)} image(s) on "
+            f"{max(1, min(workers if workers is not None else os.cpu_count() or 1, len(split_specs)))} workers..."
+        )
+
+    # --- Split every image (one worker per image) ---------------------------
+    num_workers = max(
+        1,
+        min(
+            workers if workers is not None else os.cpu_count() or 1,
+            len(split_specs),
+        ),
+    )
+
+    results: list[dict] = []
+    if split_specs:
+        with ThreadPoolExecutor(max_workers=num_workers) as pool:
+            futures = {
+                pool.submit(
+                    _split_one_image,
+                    png_path,
+                    name,
+                    bounds_dict,
+                    output_dir,
+                    axis,
+                ): name
+                for png_path, name, bounds_dict in split_specs
+            }
+            # Progress bar: one tick per image split. Each worker's PNG
+            # encode releases the GIL, so multiple workers run concurrently.
+            with tqdm(total=len(futures), desc="Splitting images", unit="img") as pbar:
+                for fut in as_completed(futures):
+                    results.append(fut.result())
+                    pbar.update(1)
+
+    # --- Build the new manifest (main thread only) --------------------------
+    # Preserve original manifest order: each split entry is replaced in-place
+    # by its two halves; passthrough entries stay as-is.
+    result_by_name = {r["original_name"]: r for r in results}
+
+    new_images: list[dict] = []
+    for entry in manifest_entries:
+        name = entry["name"]
+        if name in result_by_name:
+            r = result_by_name[name]
+            new_images.append({"name": r["first_name"], "bounds": r["first_bounds"]})
+            new_images.append({"name": r["second_name"], "bounds": r["second_bounds"]})
         else:
             new_images.append(entry)
-    if not inserted:
-        # Should not happen since we validated above, but guard anyway
-        new_images.extend([first_entry, second_entry])
 
     new_manifest = {"images": new_images}
     if "elevation_files" in manifest:
         new_manifest["elevation_files"] = manifest["elevation_files"]
 
-    # --- Write output (threaded save + copy) ---------------------------------
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Collect all I/O tasks: 2 image saves + N sibling file copies.
-    # Each is independent (disjoint output paths), so they can all run in
-    # parallel threads. PNG encoding releases the GIL; file copies are
-    # I/O-bound — ThreadPoolExecutor is the right model (no IPC overhead).
-    first_out = os.path.join(output_dir, first_name + ".png")
-    second_out = os.path.join(output_dir, second_name + ".png")
-
-    copy_specs: list[tuple[str, str]] = []
-    for src_path in get_all_files_in_directory(source_dir):
+    # --- Copy sibling files (non-image, non-manifest) -----------------------
+    sibling_count = 0
+    for src_path in get_all_files_in_directory(input_dir):
         basename = os.path.basename(src_path)
-        if basename == image_basename:
+        if basename in split_basenames:
             continue
         if basename == _MANIFEST_NAME:
             continue
-        copy_specs.append((src_path, os.path.join(output_dir, basename)))
+        shutil.copy2(src_path, os.path.join(output_dir, basename))
+        sibling_count += 1
 
-    # Total independent tasks: 2 saves + len(copy_specs) copies
-    n_tasks = 2 + len(copy_specs)
-    num_workers = max(
-        1, min(workers if workers is not None else os.cpu_count() or 1, n_tasks)
-    )
-
-    with ThreadPoolExecutor(max_workers=num_workers) as pool:
-        futures = {}
-
-        # Submit image saves (PNG encode — releases GIL)
-        futures[pool.submit(_save_image_atomic, first_img, first_out)] = first_out
-        futures[pool.submit(_save_image_atomic, second_img, second_out)] = second_out
-
-        # Submit sibling file copies (I/O-bound)
-        for src, dest in copy_specs:
-            futures[pool.submit(_copy_file, src, dest)] = dest
-
-        with tqdm(total=len(futures), desc="Writing output", unit="file") as pbar:
-            for fut in as_completed(futures):
-                fut.result()
-                pbar.update(1)
-
-    # Write the new manifest (after all files are on disk)
+    # --- Write the manifest --------------------------------------------------
     manifest_path = _save_manifest(output_dir, new_manifest)
 
-    axis_label = "left/right" if resolved_axis == _AXIS_VERTICAL else "top/bottom"
-    print(f"Split {image_stem!r} ({width}x{height}) {axis_label}")
-    print(f"  {first_name}: {first_img.size[0]}x{first_img.size[1]} px")
-    print(f"  {second_name}: {second_img.size[0]}x{second_img.size[1]} px")
-    print(f"Copied {len(copy_specs)} sibling file(s) on {num_workers} workers")
+    print(
+        f"Split {len(results)} image(s) -> {len(new_images)} image(s) "
+        f"on {num_workers} workers"
+    )
+    if sibling_count:
+        print(f"Copied {sibling_count} sibling file(s)")
     print(f"Wrote manifest: {manifest_path} ({len(new_images)} image(s))")
 
     return {
-        "original_name": image_stem,
-        "axis": resolved_axis,
-        "first": first_name,
-        "second": second_name,
+        "split_count": len(results),
+        "total_images": len(new_images),
         "manifest_path": manifest_path,
+        "num_workers": num_workers,
     }

@@ -946,32 +946,34 @@ def addSplitImageArgs(subparser):
     parserGenerate = subparser.add_parser(
         "split-image",
         help=(
-            "Split a single gathered terrain image in half (no resizing) "
-            "and update height_info.json"
+            "Split every gathered terrain image in a directory in half "
+            "(no resizing) and update height_info.json"
         ),
         description=(
-            "Takes one gathered_r*_c*.png from a terrain output directory "
-            "(produced by gather-ortho -src arcgis or process-terrain), splits "
-            "it in half along its longer pixel dimension (pure crop, no "
-            "resizing), and writes the two halves plus an updated "
-            "height_info.json to a new output directory. All sibling files "
-            "(other gathered PNGs, elevation_merged.tif, Shape.json, sidecars) "
-            "are copied to the output so it stays self-contained. The bounds "
-            "for each half are computed in Web Mercator (EPSG:3857) because "
-            "image pixels are linearly spaced in projected space, not in "
-            "WGS84 lat/lon -- a naive arithmetic latitude midpoint would "
-            "georeference the split images incorrectly."
+            "Takes a terrain output directory (produced by gather-ortho "
+            "-src arcgis or process-terrain) containing gathered_r*_c*.png "
+            "images plus a height_info.json manifest, splits every listed "
+            "image in half along its longer pixel dimension (pure crop, no "
+            "resizing), and writes the split halves plus an updated "
+            "height_info.json to a new output directory. Each image is split "
+            "in its own worker thread so all images are processed "
+            "concurrently; the main thread collects the results and writes "
+            "the single updated manifest. Non-image sibling files "
+            "(elevation_merged.tif, Shape.json, sidecars) are copied to the "
+            "output so it stays self-contained. The bounds for each half are "
+            "computed in Web Mercator (EPSG:3857) because image pixels are "
+            "linearly spaced in projected space, not in WGS84 lat/lon."
         ),
     )
 
     parserGenerate.add_argument(
         "-i",
-        "--image",
+        "--input",
         required=True,
         help=(
-            "Path to the single gathered_r*_c*.png image to split. The "
-            "image must be listed in the height_info.json manifest in the "
-            "same directory."
+            "Terrain output directory containing gathered_r*_c*.png images "
+            "and a height_info.json manifest. Every image listed in the "
+            "manifest whose PNG exists on disk is split in half."
         ),
     )
     parserGenerate.add_argument(
@@ -979,9 +981,9 @@ def addSplitImageArgs(subparser):
         "--output",
         required=True,
         help=(
-            "Directory to write the two new images, the updated "
+            "Directory to write the split images, the updated "
             "height_info.json, and copies of all sibling files. Created if "
-            "it does not exist. The original image and manifest are left "
+            "it does not exist. The original images and manifest are left "
             "untouched."
         ),
     )
@@ -990,11 +992,11 @@ def addSplitImageArgs(subparser):
         choices=["auto", "vertical", "horizontal"],
         default="auto",
         help=(
-            "Split axis (default: auto). 'auto' splits along the longer "
-            "pixel dimension (a wide image splits left/right, a tall image "
-            "splits top/bottom). 'vertical' always splits into left/right "
-            "halves (dividing longitude). 'horizontal' always splits into "
-            "top/bottom halves (dividing latitude)."
+            "Split axis (default: auto). 'auto' splits each image along its "
+            "own longer pixel dimension (a wide image splits left/right, a "
+            "tall image splits top/bottom). 'vertical' always splits into "
+            "left/right halves (dividing longitude). 'horizontal' always "
+            "splits into top/bottom halves (dividing latitude)."
         ),
     )
     parserGenerate.add_argument(
@@ -1003,11 +1005,11 @@ def addSplitImageArgs(subparser):
         type=int,
         default=None,
         help=(
-            "Number of worker threads for the parallel PNG encode/save of the "
-            "two image halves and the copy of sibling files (default: "
-            "os.cpu_count()). PNG encoding releases the GIL so the two halves "
-            "encode concurrently; file copies are I/O-bound. Lower this if "
-            "memory or disk I/O is constrained."
+            "Number of worker threads — one per image being split (default: "
+            "os.cpu_count()). PNG encoding releases the GIL so halves from "
+            "different images encode concurrently. The pool is capped at the "
+            "number of images so idle threads are never created. Lower this "
+            "if memory or disk I/O is constrained."
         ),
     )
 
@@ -1178,7 +1180,7 @@ def main():
         )
     elif args.command == "split-image":
         main_split_image(
-            image_path=args.image,
+            input_dir=args.input,
             output_dir=args.output,
             axis=args.axis,
             workers=args.workers,
