@@ -190,7 +190,9 @@ def _add_run_command(subparsers: argparse._SubParsersAction) -> None:
         required=True,
         help="Tiles per output image side; must be >= 2",
     )
-    command.add_argument("--ultra", action="store_true", help="Also produce LOD 19")
+    command.add_argument(
+        "--lod", type=int, required=True, help="Target LOD to download"
+    )
     command.add_argument(
         "--with-elevation",
         action="store_true",
@@ -357,7 +359,9 @@ def _add_status_command(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Print completed site IDs instead of the summary",
     )
-    command.add_argument("--site", type=int, default=None, help="Show one site's status")
+    command.add_argument(
+        "--site", type=int, default=None, help="Show one site's status"
+    )
 
 
 def _add_retry_command(subparsers: argparse._SubParsersAction) -> None:
@@ -419,7 +423,7 @@ def _run_prepare_command(args: argparse.Namespace) -> None:
 def _run_run_command(args: argparse.Namespace) -> None:
     options = ProcessTerrainOptions(
         dimension=args.dimension,
-        ultra=args.ultra,
+        lod=args.lod,
         with_elevation=args.with_elevation,
         keep_tiles=args.keep_tiles,
         scale_factor=args.scale_factor,

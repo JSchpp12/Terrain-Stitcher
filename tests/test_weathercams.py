@@ -16,8 +16,6 @@ from terrain_stitcher.weathercams.ledger import (
     synchronize_weathercam_ledger,
 )
 from terrain_stitcher.weathercams.pipeline import (
-    HIGH_LOD,
-    LOW_LOD,
     ProcessTerrainOptions,
     run_weathercams,
 )
@@ -138,14 +136,13 @@ def test_prepare_shapes_limit_does_not_count_completed_sites(tmp_path):
 def _fake_process_terrain(**kwargs):
     name = kwargs["name"]
     output_root = Path(kwargs["output"])
-    for lod in (LOW_LOD, HIGH_LOD):
-        tier_dir = output_root / f"{name}_{lod}"
-        tier_dir.mkdir(parents=True, exist_ok=True)
-        (tier_dir / "height_info.json").write_text(
-            json.dumps({"images": [{"name": "gathered_r0_c0"}]}),
-            encoding="utf-8",
-        )
-        (tier_dir / "gathered_r0_c0.png").write_bytes(b"fake png")
+    tier_dir = output_root / f"{name}_{kwargs['lod']}"
+    tier_dir.mkdir(parents=True, exist_ok=True)
+    (tier_dir / "height_info.json").write_text(
+        json.dumps({"images": [{"name": "gathered_r0_c0"}]}),
+        encoding="utf-8",
+    )
+    (tier_dir / "gathered_r0_c0.png").write_bytes(b"fake png")
 
 
 def test_run_weathercams_processes_pending_site_and_marks_complete(tmp_path):
@@ -161,16 +158,18 @@ def test_run_weathercams_processes_pending_site_and_marks_complete(tmp_path):
         ledger_path=ledger_path,
         shape_dir=shape_dir,
         output_root=output_root,
-        options=ProcessTerrainOptions(dimension=2),
+        options=ProcessTerrainOptions(dimension=2, lod=12),
         process_terrain=_fake_process_terrain,
     )
 
     assert result.processed_site_ids == [133]
     assert result.failed_site_ids == []
     assert load_weathercam_ledger(ledger_path) == {"133": True, "134": True}
-    assert (output_root / f"weathercam_133_{LOW_LOD}" / "height_info.json").is_file()
     assert (
-        output_root / f"weathercam_133_{HIGH_LOD}" / "gathered_r0_c0.png"
+        output_root / "weathercam_133_12" / "height_info.json"
+    ).is_file()
+    assert (
+        output_root / "weathercam_133_12" / "gathered_r0_c0.png"
     ).is_file()
 
 

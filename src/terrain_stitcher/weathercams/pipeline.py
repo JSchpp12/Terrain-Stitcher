@@ -13,17 +13,13 @@ from terrain_stitcher.weathercams.ledger import (
     pending_site_ids,
 )
 
-LOW_LOD = 14
-HIGH_LOD = 16
-ULTRA_LOD = 19
-
 
 @dataclass(frozen=True)
 class ProcessTerrainOptions:
     """Options forwarded to the existing process-terrain pipeline."""
 
     dimension: int
-    ultra: bool = False
+    lod: int
     with_elevation: bool = False
     keep_tiles: bool = False
     scale_factor: float = 1.0
@@ -64,6 +60,8 @@ def run_weathercams(
     """Process incomplete WeatherCams sites and mark successful ones complete."""
     if options.dimension < 2:
         raise ValueError("dimension must be >= 2")
+    if options.lod <= 0:
+        raise ValueError("lod must be greater than zero")
     if not 0.0 < options.scale_factor <= 1.0:
         raise ValueError("scale_factor must be in the (0.0, 1.0]")
     if limit is not None and limit <= 0:
@@ -136,7 +134,7 @@ def process_weathercam_site(
         shape_file=str(shape_path),
         output=str(output_root),
         dimension=options.dimension,
-        ultra=options.ultra,
+        lod=options.lod,
         with_elevation=options.with_elevation,
         keep_tiles=options.keep_tiles,
         scale_factor=options.scale_factor,
@@ -151,7 +149,7 @@ def process_weathercam_site(
     validate_weathercam_outputs(
         output_root,
         name=name,
-        ultra=options.ultra,
+        lod=options.lod,
         with_elevation=options.with_elevation,
     )
 
@@ -164,41 +162,36 @@ def validate_weathercam_outputs(
     output_root: Path,
     *,
     name: str,
-    ultra: bool,
+    lod: int,
     with_elevation: bool,
 ) -> None:
     """Ensure process-terrain produced non-empty manifests and image files."""
-    for lod in _expected_lods(ultra):
-        tier_dir = output_root / f"{name}_{lod}"
-        manifest_path = tier_dir / "height_info.json"
-        if not manifest_path.is_file():
-            raise FileNotFoundError(f"Missing terrain manifest: {manifest_path}")
+    tier_dir = output_root / f"{name}_{lod}"
+    manifest_path = tier_dir / "height_info.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"Missing terrain manifest: {manifest_path}")
 
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid terrain manifest: {manifest_path}") from exc
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid terrain manifest: {manifest_path}") from exc
 
-        images = manifest.get("images")
-        if not isinstance(images, list) or not images:
-            raise ValueError(f"Terrain manifest has no images: {manifest_path}")
+    images = manifest.get("images")
+    if not isinstance(images, list) or not images:
+        raise ValueError(f"Terrain manifest has no images: {manifest_path}")
 
-        for image in images:
-            image_name = image.get("name") if isinstance(image, dict) else None
-            if not image_name:
-                raise ValueError(f"Terrain image entry has no name: {manifest_path}")
-            image_path = tier_dir / f"{image_name}.png"
-            if not image_path.is_file():
-                raise FileNotFoundError(f"Missing terrain image: {image_path}")
+    for image in images:
+        image_name = image.get("name") if isinstance(image, dict) else None
+        if not image_name:
+            raise ValueError(f"Terrain image entry has no name: {manifest_path}")
+        image_path = tier_dir / f"{image_name}.png"
+        if not image_path.is_file():
+            raise FileNotFoundError(f"Missing terrain image: {image_path}")
 
     if with_elevation:
         elevation_path = output_root / f"{name}_elevation" / "elevation_merged.tif"
         if not elevation_path.is_file():
             raise FileNotFoundError(f"Missing elevation output: {elevation_path}")
-
-
-def _expected_lods(ultra: bool) -> list[int]:
-    return [LOW_LOD, HIGH_LOD, ULTRA_LOD] if ultra else [LOW_LOD, HIGH_LOD]
 
 
 def _select_site_ids(

@@ -736,22 +736,16 @@ def addPrepGeoArgs(subparser):
 def addProcessTerrainArgs(subparser):
     parserGenerate = subparser.add_parser(
         "process-terrain",
-        help=(
-            "Run a full download + gather pass producing 2-3 quality tiers of "
-            "the same AOI in one command"
-        ),
+        help=("Run a full download + gather pass for one requested LOD"),
         description=(
-            "Run a full terrain pass for a shape AOI: download the orthoimagery "
-            "once at the highest requested LOD and gather it into one directory "
-            "per quality tier. Low quality is LOD 17 and high quality is LOD 18; "
-            "add --ultra to also produce an ultra-quality LOD 19 tier. Each tier "
-            "is written to <output>/<name>_<lod> (e.g. perryville_17) with the "
-            "same gathered_r*_c*.png + height_info.json schema gather-ortho "
+            "Run a full terrain pass for a shape AOI at the required --lod. "
+            "The output is written to <output>/<name>_<lod> with the same "
+            "gathered_r*_c*.png + height_info.json schema gather-ortho "
             "produces, so downstream consumers need no changes. Chunking is "
-            "mandatory: -d/--dimension must be >= 2 (dimension 1 would emit one "
-            "file per tile -- thousands for a real AOI). With --with-elevation "
-            "a continuous elevation GeoTIFF is downloaded once (download-"
-            "elevation) and merged into every tier via gather-ortho -e."
+            "mandatory: -d/--dimension must be >= 2 (dimension 1 would emit "
+            "one file per tile -- thousands for a real AOI). With "
+            "--with-elevation, a continuous elevation GeoTIFF is downloaded "
+            "and merged into the output."
         ),
     )
 
@@ -759,11 +753,10 @@ def addProcessTerrainArgs(subparser):
         "--name",
         required=True,
         help=(
-            "Base name for the output directories. Each tier is written to "
-            "<output>/<name>_<lod> (e.g. --name perryville -> perryville_17, "
-            "perryville_18, perryville_19). The shared gdal2tiles pyramid is "
-            "kept in <output>/<name>_tiles (deleted afterward unless "
-            "--keep-tiles) and elevation in <output>/<name>_elevation."
+            "Base name for the output directory. The LOD output is written "
+            "to <output>/<name>_<lod>. The gdal2tiles pyramid is kept in "
+            "<output>/<name>_tiles (deleted afterward unless --keep-tiles) "
+            "and elevation in <output>/<name>_elevation."
         ),
     )
     parserGenerate.add_argument(
@@ -782,7 +775,7 @@ def addProcessTerrainArgs(subparser):
         "--output",
         default=".",
         help=(
-            "Base directory under which the per-tier output directories are "
+            "Base directory under which the LOD output directory is "
             "created (default: current directory)."
         ),
     )
@@ -799,14 +792,10 @@ def addProcessTerrainArgs(subparser):
         ),
     )
     parserGenerate.add_argument(
-        "--ultra",
-        action="store_true",
-        default=False,
-        help=(
-            "Also produce an ultra-quality LOD 19 tier (<name>_19). Without "
-            "this flag only LOD 17 and LOD 18 are produced. The download is "
-            "run at LOD 19 when set, LOD 18 otherwise."
-        ),
+        "--lod",
+        type=int,
+        required=True,
+        help="Required target LOD to download and gather",
     )
     parserGenerate.add_argument(
         "--with-elevation",
@@ -815,7 +804,7 @@ def addProcessTerrainArgs(subparser):
         help=(
             "Download a continuous Float32 elevation GeoTIFF once "
             "(download-elevation) into <name>_elevation and merge it into "
-            "every tier's output (gather-ortho -e). Off by default to match "
+            "the LOD output (gather-ortho -e). Off by default to match "
             "the ortho-only run.bat flow."
         ),
     )
@@ -825,9 +814,8 @@ def addProcessTerrainArgs(subparser):
         default=False,
         help=(
             "Keep the intermediate <name>_tiles gdal2tiles pyramid (and any "
-            "per-LOD fallback pyramids) after gathering. By default they are "
-            "deleted once all tiers are gathered; keep them for inspection "
-            "or manual re-runs."
+            "fallback pyramid) after gathering. By default it is deleted; "
+            "keep it for inspection or manual re-runs."
         ),
     )
     parserGenerate.add_argument(
@@ -836,8 +824,8 @@ def addProcessTerrainArgs(subparser):
         type=float,
         default=1.0,
         help=(
-            "Downscale each tile by this fraction during stitching, applied to "
-            "every tier (0.0 < value <= 1.0; 1.0 = no scaling, default). Only "
+            "Downscale each tile by this fraction during stitching "
+            "(0.0 < value <= 1.0; 1.0 = no scaling, default). Only "
             "downscaling is supported. Mirrors gather-ortho -f."
         ),
     )
@@ -1134,7 +1122,7 @@ def main():
             shape_file=args.shape,
             output=args.output,
             dimension=args.dimension,
-            ultra=args.ultra,
+            lod=args.lod,
             with_elevation=args.with_elevation,
             keep_tiles=args.keep_tiles,
             scale_factor=args.scaleFactor,

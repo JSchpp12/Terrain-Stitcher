@@ -33,13 +33,13 @@ This creates one file in `weathercams/shapes`, such as `117.json`. Use that
 site ID in the download command:
 
 ```cmd
-terrain_stitcher weathercams-run --dimension 75 --only-site 117
+terrain_stitcher weathercams-run --dimension 75 --lod 12 --only-site 117
 ```
 
-A successful run writes its tier directories under:
+A successful run writes the requested LOD output under:
 
 ```text
-weathercams/outputs/weathercam_117_<lod>
+weathercams/outputs/weathercam_117_12
 ```
 
 and marks the site `true` in the ledger.
@@ -48,7 +48,7 @@ and marks the site `true` in the ledger.
 
 ```cmd
 terrain_stitcher weathercams-prepare --view-distance 5
-terrain_stitcher weathercams-run --dimension 75
+terrain_stitcher weathercams-run --dimension 75 --lod 12
 ```
 
 ### Track and transfer progress
@@ -67,57 +67,33 @@ work between machines.
 
 ## Full terrain pass (`process-terrain`)
 
-Run a complete download + gather pass for a shape AOI in one command, producing
-one directory per quality tier. Low quality is LOD 17, high quality is LOD 18,
-and an optional ultra-quality LOD 19 tier is added with `--ultra`. Each tier is
-written to `<output>/<name>_<lod>` (e.g. `perryville_17`, `perryville_18`,
-`perryville_19`) with the same `gathered_r*_c*.png` + `height_info.json` schema
-the manual commands produce, so downstream consumers need no changes.
+Run a complete download + gather pass for one requested LOD. The output is
+written to `<output>/<name>_<lod>` using the same `gathered_r*_c*.png` +
+`height_info.json` schema the manual commands produce.
 
-The command downloads the orthoimagery once at the highest requested LOD
-(LOD 19 with `--ultra`, otherwise LOD 18) -- gdal2tiles builds a full 0..N
-pyramid -- and gathers each tier out of that shared pyramid with
-`gather-ortho --from-download --lod_min <lod>`. Chunking is mandatory:
-`-d/--dimension` must be `>= 2`, because dimension 1 would emit one file per
-cache tile (thousands for a real AOI).
-
-Prerequisite: build the service registry once with `refresh-services` (see the
-Elevation section).
+Prerequisite: build the service registry once with `refresh-services`.
 
 ```cmd
-:: low (LOD 17) + high (LOD 18)
-terrain_stitcher process-terrain --name perryville -s Shape.json -d 75
-
-:: also produce ultra (LOD 19), and a continuous elevation GeoTIFF merged into
-:: every tier via gather-ortho -e
-terrain_stitcher process-terrain --name perryville -s Shape.json -d 75 --ultra --with-elevation
+terrain_stitcher process-terrain --name perryville -s Shape.json -d 75 --lod 12
 ```
 
 Options:
 
-- `--name` (required): base name for the output directories -> `<name>_<lod>`.
+- `--name` (required): base name for the output directory.
 - `-s/--shape` (required): Shape.json defining the AOI.
-- `-o/--output`: base directory for the tier directories (default: current dir).
-- `-d/--dimension` (required, `>= 2`): tiles per output image side
-  (2 = 2x2 -> 1 image). Enforced to keep output file counts sane.
-- `--ultra`: also produce the LOD 19 tier; the download runs at LOD 19.
-- `--with-elevation`: download a continuous Float32 elevation GeoTIFF once
-  (`download-elevation`) into `<name>_elevation` and merge it into every tier
-  (`gather-ortho -e`). Off by default (ortho-only, like `run.bat`).
-- `--keep-tiles`: keep the intermediate `<name>_tiles` pyramid (and any
-  per-LOD fallback pyramids) after gathering. Deleted by default; keep them
-  for inspection or manual re-runs.
-- `-f/--scaleFactor`: downscale each tile per tier (default 1.0; only
-  downscaling). Forwarded to every tier's `gather-ortho`.
+- `-o/--output`: base output directory (default: current dir).
+- `-d/--dimension` (required, `>= 2`): tiles per output image side.
+- `--lod` (required): target LOD to download and gather.
+- `--with-elevation`: also download and merge a continuous elevation GeoTIFF.
+- `--keep-tiles`: retain the intermediate tile pyramid for inspection or
+  manual re-runs.
+- `-f/--scaleFactor`: downscale each output tile (default 1.0; only
+  downscaling).
 - `-w/--workers`, `--gather-workers`, `--chunk-px`, `--timeout`,
-  `--resampling`, `--processes`, `--service-index`: download/stitch tuning,
-  forwarded to `download-arcgis` / `download-elevation` / `gather-ortho`.
+  `--resampling`, `--processes`, `--service-index`: download/stitch tuning.
 
 This replaces the manual `download-arcgis` -> `gather-ortho` sequence in
-`run.bat`. If the installed gdal2tiles emits only the top LOD (rather than the
-full pyramid), a tier whose LOD is missing from the shared pyramid falls back
-to a dedicated download at that LOD, so the command is correct regardless of
-the gdal2tiles `-z` semantics.
+`run.bat`.
 
 ## Requirements
 
