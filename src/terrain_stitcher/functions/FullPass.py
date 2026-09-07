@@ -79,7 +79,6 @@ def _gather_kwargs(
     output_dir: str,
     dimension: int,
     scale_factor: float,
-    resume: bool,
     gather_workers: Optional[int],
     elevation_data_dir: Optional[str],
     elevation_padding_deg: float,
@@ -92,7 +91,6 @@ def _gather_kwargs(
         output_dir=output_dir,
         dimension=dimension,
         scale_factor=scale_factor,
-        resume=resume,
         workers=gather_workers,
         elevation_data_dir=elevation_data_dir,
         elevation_padding_deg=elevation_padding_deg,
@@ -119,7 +117,6 @@ def main_process_terrain(
     ultra: bool = False,
     with_elevation: bool = False,
     keep_tiles: bool = False,
-    resume: bool = False,
     scale_factor: float = 1.0,
     workers: int = 32,
     processes: int = 32,
@@ -208,7 +205,6 @@ def main_process_terrain(
                     output_dir=tier_dir,
                     dimension=dimension,
                     scale_factor=scale_factor,
-                    resume=resume,
                     gather_workers=gather_workers,
                     elevation_data_dir=elevation_data_dir,
                     elevation_padding_deg=DEFAULT_PADDING_DEG,
@@ -248,7 +244,6 @@ def main_process_terrain(
                     output_dir=tier_dir,
                     dimension=dimension,
                     scale_factor=scale_factor,
-                    resume=resume,
                     gather_workers=gather_workers,
                     elevation_data_dir=elevation_data_dir,
                     elevation_padding_deg=DEFAULT_PADDING_DEG,
@@ -262,7 +257,7 @@ def main_process_terrain(
             shutil.rmtree(d, ignore_errors=True)
         print(
             "Removed intermediate tile pyramids (use --keep-tiles to retain "
-            "them for resume / re-runs)."
+            "them for manual re-runs)."
         )
 
     print("process-terrain complete. Outputs:")

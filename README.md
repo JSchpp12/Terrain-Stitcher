@@ -2,6 +2,69 @@
 
 All terrains are prepared as 7zip archives and are available in the releases. Place the extracted 7zip archive into a directory named "terrains" next to the main.py file. Each terrain release will contain a run.bat. Execute that script. After running, it is safe to delete the tmp directory which was created.
 
+## FAA WeatherCams workflow
+
+WeatherCams sites come from the FAA JSON API. Progress is kept in a local
+`weathercams/ledger.json` file that maps site IDs to boolean completion flags:
+
+```json
+{
+  "133": true,
+  "134": false
+}
+```
+
+### Download one site
+
+Build the ArcGIS service registry once, then sync the site ledger:
+
+```cmd
+terrain_stitcher refresh-services
+terrain_stitcher weathercams-sync
+```
+
+Prepare one incomplete site:
+
+```cmd
+terrain_stitcher weathercams-prepare --view-distance 5 --limit 1
+```
+
+This creates one file in `weathercams/shapes`, such as `117.json`. Use that
+site ID in the download command:
+
+```cmd
+terrain_stitcher weathercams-run --dimension 75 --only-site 117
+```
+
+A successful run writes its tier directories under:
+
+```text
+weathercams/outputs/weathercam_117_<lod>
+```
+
+and marks the site `true` in the ledger.
+
+### Download every incomplete site
+
+```cmd
+terrain_stitcher weathercams-prepare --view-distance 5
+terrain_stitcher weathercams-run --dimension 75
+```
+
+### Track and transfer progress
+
+```cmd
+terrain_stitcher weathercams-status
+terrain_stitcher weathercams-complete --site 117
+terrain_stitcher weathercams-retry --site 117
+terrain_stitcher weathercams-export --out weathercams/exports/machine-a.json
+terrain_stitcher weathercams-import --input weathercams/exports/machine-a.json
+```
+
+Each machine has its own ledger, so import another machine's completed-site
+export before starting work there. Use `--only-site` or `--limit` to partition
+work between machines.
+
 ## Full terrain pass (`process-terrain`)
 
 Run a complete download + gather pass for a shape AOI in one command, producing
@@ -42,10 +105,8 @@ Options:
   (`download-elevation`) into `<name>_elevation` and merge it into every tier
   (`gather-ortho -e`). Off by default (ortho-only, like `run.bat`).
 - `--keep-tiles`: keep the intermediate `<name>_tiles` pyramid (and any
-  per-LOD fallback pyramids) after gathering. Deleted by default; keep them to
-  `--resume` gathers without re-downloading.
-- `--resume`: skip already-stitched groups in each tier (forwarded to
-  `gather-ortho`); combine with `--keep-tiles`.
+  per-LOD fallback pyramids) after gathering. Deleted by default; keep them
+  for inspection or manual re-runs.
 - `-f/--scaleFactor`: downscale each tile per tier (default 1.0; only
   downscaling). Forwarded to every tier's `gather-ortho`.
 - `-w/--workers`, `--gather-workers`, `--chunk-px`, `--timeout`,

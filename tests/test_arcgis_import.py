@@ -88,23 +88,3 @@ def test_stitch_arcgis_import_lod_missing_raises(tmp_path):
             lod=99,
             workers=1,
         )
-
-
-def test_stitch_arcgis_import_resume_is_idempotent(tmp_path):
-    out = tmp_path / "out"
-    import_from_arcgis_dir(
-        shape_file=None, cache_dir=str(FIXTURE), output_dir=str(out),
-        dimension=1, workers=1,
-    )
-    first = {p.name: p.stat().st_size for p in out.iterdir() if p.suffix == ".png"}
-    # Re-run with resume=True: existing groups are skipped, output unchanged.
-    import_from_arcgis_dir(
-        shape_file=None,
-        cache_dir=str(FIXTURE),
-        output_dir=str(out),
-        dimension=1,
-        resume=True,
-        workers=1,
-    )
-    second = {p.name: p.stat().st_size for p in out.iterdir() if p.suffix == ".png"}
-    assert first == second

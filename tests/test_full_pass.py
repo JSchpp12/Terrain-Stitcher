@@ -92,7 +92,6 @@ def test_cli_process_terrain_dispatches_default(monkeypatch, tmp_path):
     assert captured["ultra"] is True
     assert captured["with_elevation"] is True
     assert captured["keep_tiles"] is False
-    assert captured["resume"] is False
     assert captured["scale_factor"] == 1.0
     assert captured["workers"] == 32
     assert captured["processes"] == 32
@@ -242,7 +241,6 @@ def test_process_terrain_passthrough_options(monkeypatch, tmp_path):
         output=str(tmp_path),
         dimension=2,
         scale_factor=0.5,
-        resume=True,
         workers=4,
         processes=8,
         gather_workers=3,
@@ -262,7 +260,6 @@ def test_process_terrain_passthrough_options(monkeypatch, tmp_path):
 
     g = gathers[0]
     assert g["scale_factor"] == 0.5
-    assert g["resume"] is True
     assert g["workers"] == 3
 
 

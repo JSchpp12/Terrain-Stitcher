@@ -131,7 +131,6 @@ def _stitch_one_group(
     out_abs: str,
     pool: ProcessPoolExecutor,
     num_workers: int,
-    resume: bool,
 ) -> None:
     """Stitch a single group to its output PNG, using the shared worker pool.
 
@@ -144,9 +143,6 @@ def _stitch_one_group(
     one group is what keeps the streaming import's peak memory proportional
     to one window's tile count instead of the whole cache's.
     """
-    out_path = os.path.join(out_abs, _output_stem(group.origin) + ".png")
-    if resume and os.path.isfile(out_path):
-        return
     mode, _cw, _ch = group.canvas_meta()
     positions = group.get_traversal()
     rows = max(r for r, _ in positions) + 1
@@ -167,7 +163,7 @@ def _stitch_one_group(
         # group, so only one giant canvas is live at a time regardless of
         # num_workers (which would otherwise run num_workers multi-GB
         # canvases concurrently and blow the commit limit).
-        pool.submit(process_group, out_abs, group, resume).result()
+        pool.submit(process_group, out_abs, group).result()
 
 
 def writeManifestFromEntries(
@@ -236,7 +232,6 @@ def process(
     output_dir,
     dimension,
     scale_factor,
-    resume,
     num_workers,
     lod,
     elevation_data_dir=None,
@@ -320,20 +315,12 @@ def process(
     out_abs = os.path.abspath(output_dir)
     print(f"Resample: {_resample_strategy_label(scale_factor)}")
     msg = f"Stitching {len(sorted_origins)} group(s) on {num_workers} workers"
-    if resume:
-        msg += " (--resume)"
     print(msg + "...")
-    skipped = 0
     summaries: list[StitchedGroup] = []
     with ProcessPoolExecutor(max_workers=num_workers) as pool:
         pbar = tqdm(sorted_origins, desc="Stitching groups", unit="grp")
         for origin in pbar:
             idxs = windows[origin]
-            out_path = os.path.join(out_abs, _output_stem(origin) + ".png")
-            if resume and os.path.isfile(out_path):
-                skipped += 1
-                summaries.append(StitchedGroup(origin=origin, n_tiles=len(idxs)))
-                continue
             group = _build_arcgis_group(
                 origin,
                 nr[idxs],
@@ -346,16 +333,14 @@ def process(
                 scale_factor,
                 source.tile_path_for,
             )
-            _stitch_one_group(group, out_abs, pool, num_workers, resume)
+            _stitch_one_group(group, out_abs, pool, num_workers)
             summaries.append(StitchedGroup(origin=origin, n_tiles=len(idxs)))
             del group
             gc.collect()
         pbar.close()
 
     manifest_path = writeManifestFromEntries(output_dir, entries, elevation_files)
-    done = len(summaries) - skipped
-    note = f" ({skipped} skipped via --resume)" if skipped else ""
-    print(f"Stitched {done} group(s){note}; wrote {len(entries)} image(s).")
+    print(f"Stitched {len(summaries)} group(s); wrote {len(entries)} image(s).")
     print(f"Wrote manifest: {manifest_path} ({len(entries)} image(s))")
     return summaries
 
@@ -371,7 +356,6 @@ def import_from_download(
     output_dir: str,
     dimension: int = 1,
     scale_factor: float = 1.0,
-    resume: bool = False,
     workers: Optional[int] = None,
     elevation_data_dir: Optional[str] = None,
     elevation_padding_deg: float = DEFAULT_PADDING_DEG,
@@ -398,7 +382,6 @@ def import_from_download(
         output_dir,
         dimension,
         scale_factor,
-        resume,
         num_workers,
         elevation_padding_deg=elevation_padding_deg,
         elevation_data_dir=elevation_data_dir,
@@ -412,7 +395,6 @@ def import_from_arcgis_dir(
     output_dir: str,
     dimension: int = 1,
     scale_factor: float = 1.0,
-    resume: bool = False,
     workers: Optional[int] = None,
     elevation_data_dir: Optional[str] = None,
     lod: Optional[int] = None,
@@ -470,7 +452,6 @@ def import_from_arcgis_dir(
         output_dir,
         dimension,
         scale_factor,
-        resume,
         num_workers,
         lod,
         elevation_data_dir,

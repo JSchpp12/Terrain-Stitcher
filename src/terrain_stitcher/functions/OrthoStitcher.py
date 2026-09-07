@@ -312,18 +312,9 @@ def writeManifest(
     return manifest_path
 
 
-def process_group(
-    output_dir: os.PathLike, group: GatheredTiles, resume: bool = False
-) -> None:
+def process_group(output_dir: os.PathLike, group: GatheredTiles) -> None:
     out_name = _output_stem(group.origin) + ".png"
     out_path = os.path.join(output_dir, out_name)
-    # With --resume, skip groups whose output already exists. process_group
-    # writes via an atomic temp-then-replace save (_save_canvas), so the
-    # presence of the final file guarantees a complete, valid write from a
-    # previous run. Lets an interrupted stitch pick up where it left off
-    # instead of re-doing hours of finished work on every invocation.
-    if resume and os.path.isfile(out_path):
-        return
     image = group.createMergedImage()
     group.pasteTiles(image)
     _save_canvas(image, out_path)
@@ -335,7 +326,6 @@ def stitch_groups(
     elevation_files: Optional[list],
     output_dir: str,
     num_workers: int,
-    resume: bool = False,
     scale_factor: float = 1.0,
     passthrough_dir: Optional[str] = None,
 ) -> list["GatheredTiles"]:
@@ -346,7 +336,7 @@ def stitch_groups(
     straight from the cache grid). Both feed the same strip/ProcessPool
     composite machinery here, so behaviour -- within-group row-strip
     parallelism, lazy canvas allocation, atomic temp-then-replace saves,
-    --resume skip, resample strategy -- is identical.
+    and resample strategy -- is identical.
 
     `passthrough_dir`: when set (the stitch-ortho case), every non-tile file
     in that directory (elevation TIFs, Shape.json, sidecars, .star_ignore
@@ -358,20 +348,14 @@ def stitch_groups(
     out_abs = os.path.abspath(output_dir)
 
     pending = []
-    skipped = 0
     for gi, group in enumerate(groups):
         out_path = os.path.join(out_abs, _output_stem(group.origin) + ".png")
-        if resume and os.path.isfile(out_path):
-            skipped += 1
-            continue
         mode, _cw, _ch = group.canvas_meta()
         strips = _plan_strips(group, mode, num_workers)
         pending.append((gi, group, out_path, mode, strips))
 
     print(f"Resample: {_resample_strategy_label(scale_factor)}")
     msg = f"Stitching {len(pending)} group(s) on {num_workers} workers"
-    if skipped:
-        msg += f" ({skipped} skipped via --resume)"
     print(msg + "...")
     with tqdm(total=len(pending), desc="Stitching groups") as pbar:
         if pending:
@@ -400,7 +384,7 @@ def stitch_groups(
                             futures[fut] = ("strip", gi, r_start)
                     else:
                         remaining[gi] = 1
-                        fut = pool.submit(process_group, out_abs, group, resume)
+                        fut = pool.submit(process_group, out_abs, group)
                         futures[fut] = ("whole", gi)
                 for fut in as_completed(futures):
                     kind = futures[fut][0]
@@ -444,7 +428,6 @@ def main(
     dimension: int = 1,
     verify_tile_coverage: bool = True,
     scale_factor: float = 1.0,
-    resume: bool = False,
     workers: Optional[int] = None,
 ) -> list[GatheredTiles]:
     if dimension < 1:
@@ -474,7 +457,6 @@ def main(
         elevation_files,
         output_dir,
         num_workers,
-        resume=resume,
         scale_factor=scale_factor,
         passthrough_dir=input_dir,
     )

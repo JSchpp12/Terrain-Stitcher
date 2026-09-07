@@ -1,5 +1,9 @@
 ﻿import argparse
 
+from terrain_stitcher.weathercams.cli import (
+    add_weathercams_subcommands,
+    handle_weathercams_command,
+)
 from terrain_stitcher.functions import (
     main_process_terrain,
     main_ortho,
@@ -174,18 +178,6 @@ def addDownloadOrthoArgs(subparser):
             "factors at or below 0.25, PIL's progressive reduction "
             "(reducing_gap) is used to avoid moire and speed up large "
             "downscales."
-        ),
-    )
-    parserGenerate.add_argument(
-        "--resume",
-        action="store_true",
-        default=False,
-        help=(
-            "arcgis only: skip groups whose stitched output already exists. "
-            "Outputs are written atomically (temp-then-replace), so an "
-            "existing file is always a complete write from a prior run. Use "
-            "this to continue an interrupted stitch instead of re-doing "
-            "finished groups."
         ),
     )
     parserGenerate.add_argument(
@@ -669,19 +661,6 @@ def addStitchOrthoArgs(subparser):
         ),
     )
     parserGenerate.add_argument(
-        "--resume",
-        action="store_true",
-        default=False,
-        help=(
-            "Skip groups whose stitched output already exists in the output "
-            "directory. Outputs are written atomically (temp-then-replace), "
-            "so an existing file is always a complete write from a prior run. "
-            "Use this to continue an interrupted stitch instead of re-doing "
-            "finished groups."
-        ),
-    )
-
-    parserGenerate.add_argument(
         "-w",
         "--workers",
         type=int,
@@ -847,18 +826,8 @@ def addProcessTerrainArgs(subparser):
         help=(
             "Keep the intermediate <name>_tiles gdal2tiles pyramid (and any "
             "per-LOD fallback pyramids) after gathering. By default they are "
-            "deleted once all tiers are gathered; keep them to resume / re-run "
-            "gathers without re-downloading."
-        ),
-    )
-    parserGenerate.add_argument(
-        "--resume",
-        action="store_true",
-        default=False,
-        help=(
-            "Skip groups whose stitched output already exists in each tier "
-            "(passed to gather-ortho). Use to continue an interrupted gather "
-            "pass; combine with --keep-tiles so the pyramid is still present."
+            "deleted once all tiers are gathered; keep them for inspection "
+            "or manual re-runs."
         ),
     )
     parserGenerate.add_argument(
@@ -1038,16 +1007,19 @@ def main():
     addPrepGeoArgs(subparser)
     addProcessTerrainArgs(subparser)
     addSplitImageArgs(subparser)
+    add_weathercams_subcommands(subparser)
 
     args = parser.parse_args()
 
+    if handle_weathercams_command(args):
+        return
     if args.command == "create-bounds":
         main_shape(args.lat, args.lon, args.type, args.viewDistance)
     elif args.command == "gather-ortho":
         if args.source == "arcgis":
             # The arcgis source folds prep-ortho + stitch-ortho into the
             # import: one pass over the input tiles produces the final stitched
-            # output + manifest. -d/-f/--resume/-e/--lod/--padding are arcgis-only.
+            # output + manifest. -d/-f/-e/--lod/--padding are arcgis-only.
             # Downloading is a separate `download-arcgis` command; this stage only
             # imports tiles that already exist on disk.
 
@@ -1078,7 +1050,6 @@ def main():
                     output_dir=args.output,
                     dimension=args.dimension,
                     scale_factor=args.scaleFactor,
-                    resume=args.resume,
                     workers=args.workers,
                     elevation_data_dir=args.elevationDataDir,
                     elevation_padding_deg=elevation_padding,
@@ -1091,7 +1062,6 @@ def main():
                     args.output,
                     dimension=args.dimension,
                     scale_factor=args.scaleFactor,
-                    resume=args.resume,
                     workers=args.workers,
                     elevation_data_dir=args.elevationDataDir,
                     lod=args.lod_min,
@@ -1145,7 +1115,6 @@ def main():
             args.dimension,
             verify_tile_coverage=not args.skip_coverage_check,
             scale_factor=args.scaleFactor,
-            resume=args.resume,
             workers=args.workers,
         )
     elif args.command == "prep-geo":
@@ -1168,7 +1137,6 @@ def main():
             ultra=args.ultra,
             with_elevation=args.with_elevation,
             keep_tiles=args.keep_tiles,
-            resume=args.resume,
             scale_factor=args.scaleFactor,
             workers=args.workers,
             processes=args.processes,
