@@ -24,7 +24,6 @@ class ProcessTerrainOptions:
     keep_tiles: bool = False
     scale_factor: float = 1.0
     workers: int = 32
-    processes: int = 32
     gather_workers: Optional[int] = None
     chunk_px: int = 256
     timeout: int = 30
@@ -139,7 +138,6 @@ def process_weathercam_site(
         keep_tiles=options.keep_tiles,
         scale_factor=options.scale_factor,
         workers=options.workers,
-        processes=options.processes,
         gather_workers=options.gather_workers,
         chunk_px=options.chunk_px,
         timeout=options.timeout,

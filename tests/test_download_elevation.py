@@ -79,7 +79,7 @@ def test_download_elevation_fetches_f32_tiff(monkeypatch, tmp_path):
 
     calls = []
 
-    def fake_build_mosaic(chunk_paths, td):
+    def fake_build_mosaic(chunk_paths, td, grid_shape=None, vrt_workers=None):
         calls.append(("build_mosaic", len(chunk_paths)))
         vrt = td / "mosaic.vrt"
         vrt.write_text("vrt")
@@ -141,7 +141,7 @@ def test_download_elevation_default_res_uses_service_native(monkeypatch, tmp_pat
 
     monkeypatch.setattr(ElevationDownloader, "build_chunk_grid", fake_grid)
 
-    def fake_mosaic(chunk_paths, td):
+    def fake_mosaic(chunk_paths, td, grid_shape=None, vrt_workers=None):
         vrt = td / "mosaic.vrt"
         vrt.write_text("vrt")
         return vrt
@@ -203,7 +203,6 @@ def test_download_arcgis_selects_imagery_not_elevation(monkeypatch, tmp_path, ca
             zoom=15,
             xyz=True,
             resampling="lanczos",
-            processes=1,
             timeout=30,
             num_workers=1,
             chunk_px=256,

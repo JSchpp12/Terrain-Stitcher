@@ -127,7 +127,6 @@ def test_cli_process_terrain_dispatches_single_lod(monkeypatch, tmp_path):
     assert captured["keep_tiles"] is False
     assert captured["scale_factor"] == 1.0
     assert captured["workers"] == 32
-    assert captured["processes"] == 32
     assert captured["gather_workers"] is None
     assert captured["chunk_px"] == 256
     assert captured["timeout"] == 30
@@ -214,7 +213,6 @@ def test_process_terrain_passthrough_options(monkeypatch, tmp_path):
         lod=16,
         scale_factor=0.5,
         workers=4,
-        processes=8,
         gather_workers=3,
         chunk_px=512,
         timeout=60,
@@ -226,7 +224,6 @@ def test_process_terrain_passthrough_options(monkeypatch, tmp_path):
     assert downloads[0]["chunk_px"] == 512
     assert downloads[0]["timeout"] == 60
     assert downloads[0]["resampling"] == "cubic"
-    assert downloads[0]["processes"] == 8
     assert downloads[0]["service_index"] == 1
 
     assert gathers[0]["scale_factor"] == 0.5

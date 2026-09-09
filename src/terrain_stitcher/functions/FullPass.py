@@ -38,7 +38,6 @@ def _download_kwargs(
     chunk_px: int,
     timeout: int,
     resampling: str,
-    processes: int,
     service_index: Optional[int],
 ) -> dict:
     return dict(
@@ -48,7 +47,6 @@ def _download_kwargs(
         num_workers=workers,
         chunk_px=chunk_px,
         timeout=timeout,
-        processes=processes,
         resampling=resampling,
         service_index=service_index,
     )
@@ -101,7 +99,6 @@ def main_process_terrain(
     keep_tiles: bool = False,
     scale_factor: float = 1.0,
     workers: int = 32,
-    processes: int = 32,
     gather_workers: Optional[int] = None,
     chunk_px: int = 256,
     timeout: int = 30,
@@ -144,7 +141,6 @@ def main_process_terrain(
             chunk_px=chunk_px,
             timeout=timeout,
             resampling=resampling,
-            processes=processes,
             service_index=service_index,
         )
     )
@@ -203,7 +199,6 @@ def main_process_terrain(
                 chunk_px=chunk_px,
                 timeout=timeout,
                 resampling=resampling,
-                processes=processes,
                 service_index=service_index,
             )
         )

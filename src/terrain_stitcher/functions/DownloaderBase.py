@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
 import sys
 import time
 import itertools
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from pathlib import Path
 
 import requests
@@ -475,17 +477,13 @@ def download_all_chunks(
     else:
         print(f"Downloading {len(chunks)} chunks with {workers} workers...")
 
-    with requests.Session() as session, ThreadPoolExecutor(
-        max_workers=workers
-    ) as pool:
+    with requests.Session() as session, ThreadPoolExecutor(max_workers=workers) as pool:
         fetch = lambda c: fetch_chunk(
             session, service, c, img_format, max_retries, timeout, pixel_type
         )
         with tqdm(total=len(to_download), desc="Downloading chunks") as pbar:
             since_flush = 0
-            for chunk, res in _stream_futures(
-                pool, fetch, to_download, max_inflight
-            ):
+            for chunk, res in _stream_futures(pool, fetch, to_download, max_inflight):
                 key = _chunk_key(chunk)
                 if isinstance(res, Exception):
                     failed.append(chunk)
@@ -534,6 +532,7 @@ def download_all_chunks(
         )
     return chunk_paths, failed
 
+
 # -- Hierarchical VRT support ------------------------------------------------
 # A flat VRT with hundreds of thousands of sources produces an XML file that
 # is too large for gdal2tiles to parse (the VRT driver builds an in-memory DOM
@@ -556,6 +555,109 @@ _HIERARCHICAL_VRT_THRESHOLD = 50_000
 # build and parse quickly, and the resulting ~200 sub-VRTs keep the top-level
 # VRT under ~200 KB.
 _SUB_VRT_BATCH_SIZE = 10_000
+
+# -- VRT state persistence (hierarchical sub-VRT resume) ---------------------
+
+VRT_STATE_FILENAME = "vrt_state.json"
+_VRT_STATE_VERSION = 1
+
+
+def _empty_vrt_state() -> dict:
+    """Return a fresh, empty VRT state dict."""
+    return {
+        "version": _VRT_STATE_VERSION,
+        "batch_size": _SUB_VRT_BATCH_SIZE,
+        "grid": {},
+        "sub_vrts": {},
+        "top_level": None,
+    }
+
+
+def _load_vrt_state(tmp_dir: Path) -> dict:
+    """Load vrt_state.json from *tmp_dir*, or return an empty state if the
+    file is missing, corrupt, or has an incompatible version."""
+    path = tmp_dir / VRT_STATE_FILENAME
+    if path.is_file():
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                state = json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            state = None
+        if (
+            isinstance(state, dict)
+            and state.get("version") == _VRT_STATE_VERSION
+            and isinstance(state.get("sub_vrts"), dict)
+        ):
+            if not isinstance(state.get("top_level"), (dict, type(None))):
+                state["top_level"] = None
+            return state
+        print(f"Warning: {VRT_STATE_FILENAME} corrupt or incompatible -- ignoring it.")
+    return _empty_vrt_state()
+
+
+def _save_vrt_state(tmp_dir: Path, state: dict) -> None:
+    """Atomically write the VRT state (write tmp file, then os.replace)."""
+    path = tmp_dir / VRT_STATE_FILENAME
+    tmp_path = tmp_dir / (VRT_STATE_FILENAME + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(state, fh, indent=2)
+    os.replace(str(tmp_path), str(path))
+
+
+def _batch_fingerprint(
+    batch_id: int, coords: list[tuple[int, int]], batch_size: int
+) -> str:
+    """Deterministic fingerprint for a sub-VRT batch's expected source set."""
+    h = hashlib.sha256()
+    h.update(f"v{_VRT_STATE_VERSION}:{batch_size}:{batch_id}:{len(coords)}:".encode())
+    for row, col in sorted(coords):
+        h.update(f"{row},{col};".encode())
+    return f"sha256:{h.hexdigest()}"
+
+
+def _top_level_fingerprint(sub_fingerprints: list[str]) -> str:
+    """Deterministic fingerprint for the top-level VRT's sub-VRT set."""
+    h = hashlib.sha256()
+    h.update(f"v{_VRT_STATE_VERSION}:top:{len(sub_fingerprints)}:".encode())
+    for fp in sorted(sub_fingerprints):
+        h.update(f"{fp};".encode())
+    return f"sha256:{h.hexdigest()}"
+
+
+def _plan_sub_vrt_batches(
+    chunk_paths: list[Path],
+    grid_shape: tuple[int, int] | None = None,
+    batch_size: int | None = None,
+) -> tuple[list[tuple[int, list[Path]]], tuple[int, int]]:
+    if batch_size is None:
+        batch_size = _SUB_VRT_BATCH_SIZE
+    """Group chunk paths into deterministic batches by linear grid position.
+    Each chunk's batch is ``(row * n_cols + col) // batch_size``, so a chunk
+    always belongs to the same expected batch across reruns, even when other
+    chunks (previously failed ones) are added later.
+
+    Returns ``(batches, (n_rows, n_cols))`` where *batches* is a sorted list
+    of ``(batch_id, [chunk_path, ...])`` with paths sorted by (row, col).
+    """
+    if grid_shape is not None:
+        n_rows, n_cols = grid_shape
+    else:
+        all_coords = [_parse_chunk_coords(p) for p in chunk_paths]
+        n_rows = max((r for r, _ in all_coords), default=-1) + 1
+        n_cols = max((c for _, c in all_coords), default=-1) + 1
+
+    groups: dict[int, list[tuple[tuple[int, int], Path]]] = {}
+    for p in chunk_paths:
+        rc = _parse_chunk_coords(p)
+        bid = (rc[0] * n_cols + rc[1]) // batch_size
+        groups.setdefault(bid, []).append((rc, p))
+
+    batches = []
+    for bid in sorted(groups):
+        items = groups[bid]
+        items.sort(key=lambda x: x[0])
+        batches.append((bid, [p for _, p in items]))
+    return batches, (n_rows, n_cols)
 
 
 def _parse_chunk_coords(path: Path) -> tuple[int, int]:
@@ -585,9 +687,7 @@ def _build_vrt_inprocess(src_paths: list[str], vrt_path: Path) -> None:
     ds = None  # close/flush the VRT dataset
 
 
-def _build_vrt_subprocess(
-    src_paths: list[str], vrt_path: Path, tmp_dir: Path
-) -> None:
+def _build_vrt_subprocess(src_paths: list[str], vrt_path: Path, tmp_dir: Path) -> None:
     """Build a VRT by shelling out to gdalbuildvrt.
 
     Fallback used when the GDAL Python bindings are not importable.  Captures
@@ -613,53 +713,197 @@ def _build_vrt_subprocess(
 
 
 def _build_vrt(
-    src_paths: list[str], vrt_path: Path, tmp_dir: Path
+    src_paths: list[str],
+    vrt_path: Path,
+    tmp_dir: Path,
+    force_subprocess: bool = False,
 ) -> None:
-    """Build a VRT from src_paths, trying the Python bindings then subprocess."""
-    try:
-        _build_vrt_inprocess(src_paths, vrt_path)
-    except ImportError:
-        _build_vrt_subprocess(src_paths, vrt_path, tmp_dir)
+    """Build a VRT from *src_paths*, trying the Python bindings then
+    subprocess.
+
+    When *force_subprocess* is True (parallel builds) the bindings path is
+    skipped because GDAL Python binding calls are not assumed thread-safe.
+    """
+    if not force_subprocess:
+        try:
+            _build_vrt_inprocess(src_paths, vrt_path)
+            return
+        except ImportError:
+            pass
+    _build_vrt_subprocess(src_paths, vrt_path, tmp_dir)
+
+
+def _build_sub_vrt_file(
+    batch_id: int,
+    batch_paths: list[Path],
+    tmp_dir: Path,
+    parallel: bool = False,
+) -> Path:
+    """Build one sub-VRT to a temporary ``.partial`` file, then atomically
+    rename it to the final ``.vrt`` path.
+
+    This is the worker function submitted to the thread pool. It does not
+    touch shared state (the caller / coordinator handles that).
+    """
+    final_path = tmp_dir / f"sub_{batch_id:05d}.vrt"
+    partial_path = tmp_dir / f"sub_{batch_id:05d}.vrt.partial"
+    src_paths = [str(p) for p in batch_paths]
+    if parallel:
+        _build_vrt(src_paths, partial_path, tmp_dir, force_subprocess=True)
+    else:
+        _build_vrt(src_paths, partial_path, tmp_dir)
+    os.replace(str(partial_path), str(final_path))
+    return final_path
 
 
 def _build_hierarchical_vrt(
-    chunk_paths: list[Path], tmp_dir: Path
+    chunk_paths: list[Path],
+    tmp_dir: Path,
+    vrt_workers: int,
+    grid_shape: tuple[int, int] | None = None,
 ) -> Path:
     """Build a two-level VRT (VRT-of-VRTs) for large chunk counts.
 
-    Chunks are sorted by (row, col) parsed from filenames and split into
-    batches of _SUB_VRT_BATCH_SIZE.  A sub-VRT is built per batch, then a
-    top-level VRT references all sub-VRTs.  This keeps the top-level VRT
-    small (~200 KB for 1.8M chunks) so gdal2tiles can parse it; sub-VRTs are
-    opened lazily by GDAL's proxy pool as tiles are read.
+    Chunks are grouped into deterministic batches by linear grid position
+    (see :func:`_plan_sub_vrt_batches`). Sub-VRTs are built in parallel by a
+    bounded thread pool, each written atomically (build to ``.partial`` then
+    ``os.replace``). Completion is recorded in ``vrt_state.json`` after each
+    sub-VRT is published, so an interrupted run only rebuilds missing or
+    changed batches.
     """
-    sorted_paths = sorted(chunk_paths, key=_parse_chunk_coords)
-
-    batches = [
-        sorted_paths[i : i + _SUB_VRT_BATCH_SIZE]
-        for i in range(0, len(sorted_paths), _SUB_VRT_BATCH_SIZE)
-    ]
+    batches, (n_rows, n_cols) = _plan_sub_vrt_batches(chunk_paths, grid_shape)
     n_batches = len(batches)
     print(
         f"Building hierarchical VRT: {len(chunk_paths)} chunks in "
         f"{n_batches} sub-VRTs (batch size {_SUB_VRT_BATCH_SIZE})..."
     )
 
-    sub_vrt_paths: list[str] = []
-    with tqdm(total=n_batches, desc="Building sub-VRTs", unit="vrt") as pbar:
-        for i, batch in enumerate(batches):
-            sub_vrt = tmp_dir / f"sub_{i:05d}.vrt"
-            _build_vrt([str(p) for p in batch], sub_vrt, tmp_dir)
-            sub_vrt_paths.append(str(sub_vrt))
-            pbar.update(1)
+    # Compute per-batch fingerprints
+    tasks: list[tuple[int, list[Path], str]] = []
+    for batch_id, paths in batches:
+        coords = [_parse_chunk_coords(p) for p in paths]
+        fp = _batch_fingerprint(batch_id, coords, _SUB_VRT_BATCH_SIZE)
+        tasks.append((batch_id, paths, fp))
 
+    # Load persistent state (corrupt-safe)
+    state = _load_vrt_state(tmp_dir)
+    state["batch_size"] = _SUB_VRT_BATCH_SIZE
+    state["grid"] = {"rows": n_rows, "cols": n_cols}
+    state_entries: dict = state.setdefault("sub_vrts", {})
+
+    # Clean stale .partial files from a previous interrupted run
+    for partial in tmp_dir.glob("sub_*.vrt.partial"):
+        partial.unlink(missing_ok=True)
+    (tmp_dir / "mosaic.vrt.partial").unlink(missing_ok=True)
+    (tmp_dir / (VRT_STATE_FILENAME + ".tmp")).unlink(missing_ok=True)
+
+    def _is_reusable(task):
+        bid, _, fp = task
+        entry = state_entries.get(f"{bid:05d}")
+        if not entry or not entry.get("complete"):
+            return False
+        if entry.get("fingerprint") != fp:
+            return False
+        final = tmp_dir / entry.get("file", f"sub_{bid:05d}.vrt")
+        return final.is_file() and final.stat().st_size > 0
+
+    reusable = [t for t in tasks if _is_reusable(t)]
+    pending = [t for t in tasks if not _is_reusable(t)]
+
+    if reusable:
+        print(
+            f"Resuming: {len(reusable)} sub-VRT(s) already complete, "
+            f"building {len(pending)} remaining..."
+        )
+
+    completed: dict[int, Path] = {}
+    errors: list[tuple[int, Exception]] = []
+    workers = max(1, min(vrt_workers if vrt_workers is not None else 1, 8))
+    parallel = workers > 1
+
+    if pending:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(_build_sub_vrt_file, bid, paths, tmp_dir, parallel): (
+                    bid,
+                    paths,
+                    fp,
+                )
+                for bid, paths, fp in pending
+            }
+            with tqdm(total=n_batches, desc="Building sub-VRTs", unit="vrt") as pbar:
+                for _ in reusable:
+                    pbar.update(1)
+                for future in as_completed(futures):
+                    bid, paths, fp = futures[future]
+                    try:
+                        final_path = future.result()
+                    except Exception as exc:
+                        errors.append((bid, exc))
+                    else:
+                        completed[bid] = final_path
+                        state_entries[f"{bid:05d}"] = {
+                            "file": final_path.name,
+                            "chunk_count": len(paths),
+                            "fingerprint": fp,
+                            "complete": True,
+                        }
+                        _save_vrt_state(tmp_dir, state)
+                    pbar.update(1)
+    else:
+        with tqdm(total=n_batches, desc="Building sub-VRTs", unit="vrt") as pbar:
+            for _ in tasks:
+                pbar.update(1)
+        print(f"All {n_batches} sub-VRT(s) already complete -- skipping build.")
+
+    if errors:
+        bid, exc = errors[0]
+        raise RuntimeError(f"Sub-VRT build failed for batch {bid:05d}: {exc}") from exc
+
+    # Collect final sub-VRT paths sorted by batch ID
+    sorted_sub_paths = []
+    for bid, _, _ in tasks:  # tasks is sorted by batch_id
+        if bid in completed:
+            sorted_sub_paths.append(str(completed[bid]))
+        else:
+            entry = state_entries[f"{bid:05d}"]
+            sorted_sub_paths.append(str(tmp_dir / entry["file"]))
+
+    # Top-level VRT (atomic)
+    top_fp = _top_level_fingerprint([fp for _, _, fp in tasks])
     top_vrt = tmp_dir / "mosaic.vrt"
-    _build_vrt(sub_vrt_paths, top_vrt, tmp_dir)
-    print(f"Top-level VRT written: {top_vrt} ({n_batches} sub-VRT sources)")
+    top_entry = state.get("top_level")
+    top_reusable = (
+        isinstance(top_entry, dict)
+        and top_entry.get("fingerprint") == top_fp
+        and top_entry.get("sub_vrt_count") == n_batches
+        and top_vrt.is_file()
+        and top_vrt.stat().st_size > 0
+    )
+
+    if not top_reusable:
+        top_partial = tmp_dir / "mosaic.vrt.partial"
+        _build_vrt(sorted_sub_paths, top_partial, tmp_dir)
+        os.replace(str(top_partial), str(top_vrt))
+        state["top_level"] = {
+            "file": "mosaic.vrt",
+            "sub_vrt_count": n_batches,
+            "fingerprint": top_fp,
+        }
+        _save_vrt_state(tmp_dir, state)
+        print(f"Top-level VRT written: {top_vrt} ({n_batches} sub-VRT sources)")
+    else:
+        print(f"Top-level VRT already complete -- skipping build.")
+
     return top_vrt
 
 
-def build_mosaic(chunk_paths, tmp_dir: Path) -> Path:
+def build_mosaic(
+    chunk_paths,
+    tmp_dir: Path,
+    vrt_workers: int,
+    grid_shape: tuple[int, int] | None = None,
+) -> Path:
     """Build a VRT mosaic from chunk GeoTIFFs.
 
     For large chunk counts (above _HIERARCHICAL_VRT_THRESHOLD) a hierarchical
@@ -668,7 +912,7 @@ def build_mosaic(chunk_paths, tmp_dir: Path) -> Path:
     as before.
     """
     if len(chunk_paths) > _HIERARCHICAL_VRT_THRESHOLD:
-        return _build_hierarchical_vrt(chunk_paths, tmp_dir)
+        return _build_hierarchical_vrt(chunk_paths, tmp_dir, vrt_workers, grid_shape)
 
     vrt_path = tmp_dir / "mosaic.vrt"
     file_list = tmp_dir / "chunk_list.txt"
@@ -685,30 +929,6 @@ def build_mosaic(chunk_paths, tmp_dir: Path) -> Path:
             f"gdalbuildvrt failed (exit {exc.returncode}):\n{exc.stderr}"
         ) from exc
     return vrt_path
-
-
-def _translate_to_geotiff(vrt_path: Path, out_path: Path) -> Path:
-    """Burn a VRT into a single standalone GeoTIFF at *out_path*.
-
-    Tries the GDAL Python bindings first (in-process), falling back to the
-    ``gdal_translate`` command-line tool when they are not importable.
-    """
-    try:
-        from osgeo import gdal
-
-        ds = gdal.Translate(str(out_path), str(vrt_path), format="GTiff")
-        if ds is None:
-            raise RuntimeError(f"gdal.Translate failed for {vrt_path}")
-        ds = None
-        return Path(out_path)
-    except ImportError:
-        subprocess.run(
-            ["gdal_translate", str(vrt_path), str(out_path)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return Path(out_path)
 
 
 class ArcGISDownloaderBase:

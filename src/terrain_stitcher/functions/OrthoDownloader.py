@@ -147,7 +147,6 @@ class OrthoDownloader(ArcGISDownloaderBase):
         zoom: int,
         xyz: bool,
         resampling: str,
-        processes: int,
         timeout: int,
         num_workers: int,
         chunk_px: int,
@@ -182,6 +181,9 @@ class OrthoDownloader(ArcGISDownloaderBase):
 
         chunks = build_chunk_grid(xmin, ymin, xmax, ymax, chunk_px, pixel_size_m)
 
+        n_rows = max(c["row"] for c in chunks) + 1
+        n_cols = max(c["col"] for c in chunks) + 1
+
         print(f"Downloading {len(chunks)} chunks with {num_workers} workers...")
         chunk_paths, failed = self.download_chunks(
             service, chunks, tmp_dir, timeout, num_workers
@@ -196,11 +198,16 @@ class OrthoDownloader(ArcGISDownloaderBase):
 
         if not skip_mosaic:
             print("Building mosaic...")
-            mosaic_path = build_mosaic(chunk_paths, tmp_dir)
+            mosaic_path = build_mosaic(
+                chunk_paths,
+                tmp_dir,
+                grid_shape=(n_rows, n_cols),
+                vrt_workers=num_workers,
+            )
 
             print(f"Tiling (zoom {zoom})...")
             run_gdal2tiles(
-                mosaic_path, outdir, zoom, xyz, resampling, processes, "none"
+                mosaic_path, outdir, zoom, xyz, resampling, num_workers, "none"
             )
 
             if failed:
@@ -226,7 +233,6 @@ def download_from_arcgis(
     zoom,
     xyz,
     resampling,
-    processes,
     timeout,
     num_workers,
     chunk_px,
@@ -240,7 +246,6 @@ def download_from_arcgis(
         zoom=zoom,
         xyz=xyz,
         resampling=resampling,
-        processes=processes,
         timeout=timeout,
         num_workers=num_workers,
         chunk_px=chunk_px,
@@ -254,7 +259,6 @@ def main(
     outdir="output_tiles",
     xyz: bool = True,
     resampling: str = "lanczos",
-    processes: int = 32,
     timeout: int = 30,
     num_workers: int = 32,
     chunk_px: int = 256,
@@ -268,7 +272,6 @@ def main(
         zoom=lod,
         xyz=xyz,
         resampling=resampling,
-        processes=processes,
         timeout=timeout,
         num_workers=num_workers,
         chunk_px=chunk_px,

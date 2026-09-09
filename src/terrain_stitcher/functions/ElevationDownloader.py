@@ -16,8 +16,35 @@ from .DownloaderBase import (
     WGS84_TO_WEBMERC,
     build_chunk_grid,
     build_mosaic,
-    _translate_to_geotiff,
 )
+
+
+
+
+def _translate_to_geotiff(vrt_path: Path, out_path: Path) -> Path:
+    """Burn a VRT into a single standalone GeoTIFF at *out_path*.
+
+    Tries the GDAL Python bindings first (in-process), falling back to the
+    gdal_translate command-line tool when they are not importable.
+    """
+    import subprocess
+
+    try:
+        from osgeo import gdal
+
+        ds = gdal.Translate(str(out_path), str(vrt_path), format="GTiff")
+        if ds is None:
+            raise RuntimeError(f"gdal.Translate failed for {vrt_path}")
+        ds = None  # close the output dataset
+        return Path(out_path)
+    except ImportError:
+        subprocess.run(
+            ["gdal_translate", str(vrt_path), str(out_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return Path(out_path)
 
 
 class ElevationDownloader(ArcGISDownloaderBase):
@@ -86,6 +113,9 @@ class ElevationDownloader(ArcGISDownloaderBase):
 
         chunks = build_chunk_grid(xmin, ymin, xmax, ymax, chunk_px, pixel_size_m)
 
+        n_rows = max(c["row"] for c in chunks) + 1
+        n_cols = max(c["col"] for c in chunks) + 1
+
         # Elevation chunks are already-georeferenced F32 TIFFs, so we skip the
         # georeference pass and write the bytes straight to disk.
         chunk_paths, failed = self.download_chunks(
@@ -100,7 +130,11 @@ class ElevationDownloader(ArcGISDownloaderBase):
             sys.exit(1)
 
         print("Building mosaic...")
-        mosaic_path = build_mosaic(chunk_paths, tmp_dir)
+        mosaic_path = build_mosaic(
+            chunk_paths, tmp_dir,
+            grid_shape=(n_rows, n_cols),
+            vrt_workers=num_workers,
+        )
 
         print(f"Writing merged GeoTIFF -> {outdir}")
         _translate_to_geotiff(mosaic_path, Path(outdir))

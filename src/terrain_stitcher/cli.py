@@ -1,4 +1,4 @@
-﻿import argparse
+import argparse
 
 from terrain_stitcher.weathercams.cli import (
     add_weathercams_subcommands,
@@ -331,16 +331,6 @@ def addDownloadArcgisArgs(subparser):
             "gdal2tiles resampling method, passed through as -r (default: "
             "lanczos). Controls how the mosaic is resampled when producing "
             "each zoom level's tiles."
-        ),
-    )
-    parserGenerate.add_argument(
-        "--processes",
-        type=int,
-        default=32,
-        help=(
-            "Number of gdal2tiles tiling processes (default: 32). Passed to "
-            "gdal2tiles as --processes; more processes tile faster on "
-            "multi-core machines."
         ),
     )
     parserGenerate.add_argument(
@@ -878,15 +868,6 @@ def addProcessTerrainArgs(subparser):
         ),
     )
     parserGenerate.add_argument(
-        "--processes",
-        type=int,
-        default=32,
-        help=(
-            "Number of gdal2tiles tiling processes for the download (default: "
-            "32). Mirrors download-arcgis --processes."
-        ),
-    )
-    parserGenerate.add_argument(
         "--service-index",
         type=int,
         default=None,
@@ -1067,7 +1048,6 @@ def main():
             timeout=args.timeout,
             num_workers=args.workers,
             chunk_px=args.chunk_px,
-            processes=args.processes,
             service_index=args.service_index,
             skip_mosaic=args.skip_mosaic,
         )
@@ -1127,7 +1107,6 @@ def main():
             keep_tiles=args.keep_tiles,
             scale_factor=args.scaleFactor,
             workers=args.workers,
-            processes=args.processes,
             gather_workers=args.gather_workers,
             chunk_px=args.chunk_px,
             timeout=args.timeout,
