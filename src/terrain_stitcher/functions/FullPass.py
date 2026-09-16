@@ -59,7 +59,7 @@ def _gather_kwargs(
     output_dir: str,
     dimension: int,
     scale_factor: float,
-    gather_workers: Optional[int],
+    workers: int,
     elevation_data_dir: Optional[str],
     elevation_padding_deg: float,
 ) -> dict:
@@ -71,7 +71,7 @@ def _gather_kwargs(
         output_dir=output_dir,
         dimension=dimension,
         scale_factor=scale_factor,
-        workers=gather_workers,
+        workers=workers,
         elevation_data_dir=elevation_data_dir,
         elevation_padding_deg=elevation_padding_deg,
     )
@@ -99,7 +99,7 @@ def main_process_terrain(
     keep_tiles: bool = False,
     scale_factor: float = 1.0,
     workers: int = 32,
-    gather_workers: Optional[int] = None,
+
     chunk_px: int = 256,
     timeout: int = 30,
     resampling: str = "lanczos",
@@ -174,7 +174,7 @@ def main_process_terrain(
                 output_dir=tier_dir,
                 dimension=dimension,
                 scale_factor=scale_factor,
-                gather_workers=gather_workers,
+                workers=workers,
                 elevation_data_dir=elevation_data_dir,
                 elevation_padding_deg=DEFAULT_PADDING_DEG,
             )
@@ -211,7 +211,7 @@ def main_process_terrain(
                 output_dir=tier_dir,
                 dimension=dimension,
                 scale_factor=scale_factor,
-                gather_workers=gather_workers,
+                workers=workers,
                 elevation_data_dir=elevation_data_dir,
                 elevation_padding_deg=DEFAULT_PADDING_DEG,
             )

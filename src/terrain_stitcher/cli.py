@@ -830,17 +830,6 @@ def addProcessTerrainArgs(subparser):
         ),
     )
     parserGenerate.add_argument(
-        "--gather-workers",
-        type=int,
-        default=None,
-        help=(
-            "Worker processes for each tier's gather-ortho stitch (default: "
-            "os.cpu_count). Each worker holds one group's canvas in memory, so "
-            "lower this if a high-LOD tier with a large --dimension exhausts "
-            "memory."
-        ),
-    )
-    parserGenerate.add_argument(
         "--chunk-px",
         type=int,
         default=256,
@@ -1107,7 +1096,6 @@ def main():
             keep_tiles=args.keep_tiles,
             scale_factor=args.scaleFactor,
             workers=args.workers,
-            gather_workers=args.gather_workers,
             chunk_px=args.chunk_px,
             timeout=args.timeout,
             resampling=args.resampling,

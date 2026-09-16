@@ -155,7 +155,7 @@ def _stitch_one_group(
         }
         for fut in as_completed(fut_to_r):
             _paste_strip(canvas, fut.result(), fut_to_r[fut], group.cell_height)
-        _save_canvas(canvas, out_path)
+        _save_canvas(canvas, out_abs)
         del canvas
     else:
         # Whole-group: canvas is allocated and saved inside the worker, never
