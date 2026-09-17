@@ -428,8 +428,6 @@ def _run_run_command(args: argparse.Namespace) -> None:
         keep_tiles=args.keep_tiles,
         scale_factor=args.scale_factor,
         workers=args.workers,
-        processes=args.processes,
-        gather_workers=args.gather_workers,
         chunk_px=args.chunk_px,
         timeout=args.timeout,
         resampling=args.resampling,

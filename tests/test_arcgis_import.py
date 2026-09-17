@@ -9,6 +9,7 @@ ArcGIS exploded-cache fixture (3 PNGs under _alllayers/L23/R0027e3a0/).
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 from pathlib import Path
@@ -48,6 +49,52 @@ def test_stitch_arcgis_import_dimension_one_emits_one_image_per_tile(tmp_path):
         assert png.is_file()
         with pImage.open(png) as im:
             assert im.size[0] > 0 and im.size[1] > 0
+
+
+def test_stitch_one_group_strip_path_writes_group_png(tmp_path, monkeypatch):
+    """The strip path must publish to the group's PNG, not the output dir.
+
+    Regression test for the Windows failure where ``_save_canvas`` wrote
+    ``<output_dir>.tmp`` and then tried to replace ``<output_dir>`` itself.
+    The output-dir path is a directory, so that rename fails with WinError 5.
+    """
+    import terrain_stitcher.functions.ArcGisImporter as arcgis_importer
+
+    class _Group:
+        origin = (2, 3)
+        cell_width = 1
+        cell_height = 1
+
+        def canvas_meta(self):
+            return "RGB", 1, 1
+
+        def get_traversal(self):
+            return {(0, 0)}
+
+    class _Pool:
+        def submit(self, function, spec):
+            future = concurrent.futures.Future()
+            future.set_result(pImage.new("RGB", (1, 1)))
+            return future
+
+    out = tmp_path / "out"
+    out.mkdir()
+
+    monkeypatch.setattr(
+        arcgis_importer,
+        "_plan_strips",
+        lambda group, mode, workers: [(0, "strip-spec")],
+    )
+
+    arcgis_importer._stitch_one_group(
+        _Group(), str(out), _Pool(), num_workers=2
+    )
+
+    expected = out / "gathered_r2_c3.png"
+    assert expected.is_file()
+    assert not (out / "gathered_r2_c3.png.tmp").exists()
+    with pImage.open(expected) as image:
+        assert image.size == (1, 1)
 
 
 def test_stitch_arcgis_import_dimension_two_partitions_windows(tmp_path):

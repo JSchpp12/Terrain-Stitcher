@@ -148,6 +148,7 @@ def _stitch_one_group(
     rows = max(r for r, _ in positions) + 1
     cols = max(c for _, c in positions) + 1
     strips = _plan_strips(group, mode, num_workers)
+    out_path = os.path.join(out_abs, _output_stem(group.origin) + ".png")
     if strips:
         canvas = pImage.new(mode, (cols * group.cell_width, rows * group.cell_height))
         fut_to_r = {
@@ -155,7 +156,7 @@ def _stitch_one_group(
         }
         for fut in as_completed(fut_to_r):
             _paste_strip(canvas, fut.result(), fut_to_r[fut], group.cell_height)
-        _save_canvas(canvas, out_abs)
+        _save_canvas(canvas, out_path)
         del canvas
     else:
         # Whole-group: canvas is allocated and saved inside the worker, never
