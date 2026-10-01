@@ -111,10 +111,12 @@ docker build -f docker/Dockerfile -t terrain-stitcher:latest .
 docker run --rm -v "$PWD:/data" terrain-stitcher:latest refresh-services
 ```
 
-Or with Compose (from the repo root):
+Or with Compose (from the repo root — the stacks mount nothing by default, so
+bring a data directory with `-v`; see [docker/README.md](docker/README.md)):
 
 ```bash
-docker compose -f docker/docker-compose.yml run --rm terrain-stitcher refresh-services
+docker compose -f docker/docker-compose.yml run --rm \
+  -v "./data:/data" terrain-stitcher refresh-services
 ```
 
 ### Local Python

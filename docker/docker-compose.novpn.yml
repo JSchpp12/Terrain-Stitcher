@@ -4,10 +4,10 @@
 # over your normal connection. It reads the repo-root .env too, but only the
 # USGS credentials apply; the Surfshark/WireGuard settings are ignored.
 #
-# Run from the repository root:
-#   docker compose -f docker/docker-compose.novpn.yml run --rm terrain-stitcher refresh-services
-# ...or from inside this directory:
-#   cd docker && docker compose -f docker-compose.novpn.yml run --rm terrain-stitcher refresh-services
+# Run from the repository root. No volumes are baked in, so mount your data
+# directory at /data on every run:
+#   docker compose -f docker/docker-compose.novpn.yml run --rm \
+#     -v "./data/perryville:/data" terrain-stitcher refresh-services
 #
 # For the Surfshark/Gluetun VPN variant, use docker-compose.yml.
 
@@ -20,10 +20,10 @@ services:
       dockerfile: docker/Dockerfile
     image: terrain-stitcher:latest
     working_dir: /data
-    volumes:
-      # Repo root is mounted at /data. Override per run with a different data
-      # directory: `docker compose ... run -v <host-path>:/data ...`.
-      - ..:/data
+    # Nothing is mounted by default — bring your own data directory:
+    #   docker compose ... run -v <host-dir>:/data terrain-stitcher <command>
+    # (`run --rm` discards the container afterwards, so without a mount any
+    # output it wrote under /data is lost.)
     env_file:
       # Repo-root .env: the app only uses the optional USGS credentials.
       - path: ../.env
