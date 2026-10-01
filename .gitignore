@@ -5,6 +5,8 @@ data/
 media/
 src/tmpDownloads/
 .env
+.env.*
+!.env.example
 .vscode/
 *.egg-info
 *.zip

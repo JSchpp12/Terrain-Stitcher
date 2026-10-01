@@ -100,11 +100,21 @@ This replaces the manual `download-arcgis` -> `gather-ortho` sequence in
 ### Docker (recommended)
 
 A self-contained image (Python, GDAL, `gdal2tiles`, and all Python
-requirements) is provided. See [DOCKER.md](DOCKER.md).
+requirements) is provided. See [docker/README.md](docker/README.md) for the
+full guide. Two Compose stacks ship in `docker/`: `docker-compose.yml` routes
+all traffic through Surfshark over WireGuard via
+[Gluetun](https://github.com/qdm12/gluetun), while `docker-compose.novpn.yml`
+runs directly with no VPN.
 
 ```bash
-docker build -t terrain-stitcher:latest .
+docker build -f docker/Dockerfile -t terrain-stitcher:latest .
 docker run --rm -v "$PWD:/data" terrain-stitcher:latest refresh-services
+```
+
+Or with Compose (from the repo root):
+
+```bash
+docker compose -f docker/docker-compose.yml run --rm terrain-stitcher refresh-services
 ```
 
 ### Local Python

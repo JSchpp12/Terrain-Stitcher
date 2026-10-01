@@ -1,0 +1,68 @@
+# Terrain-Stitcher behind Gluetun (Surfshark + WireGuard)
+#
+# The app shares Gluetun's network namespace (`network_mode: service:gluetun`),
+# so every request it makes leaves through the Surfshark tunnel. Gluetun's
+# firewall is a kill switch: if the tunnel drops the app loses network access
+# instead of leaking over your ISP.
+#
+# All shared config lives in the repo-root .env. Run from the repository root:
+#   docker compose -f docker/docker-compose.yml build
+#   docker compose -f docker/docker-compose.yml run --rm terrain-stitcher refresh-services
+# ...or from inside this directory:
+#   cd docker && docker compose run --rm terrain-stitcher refresh-services
+#
+# To target a different endpoint per simultaneous instance, point VPN_ENV_FILE
+# at another env file that overrides SERVER_HOSTNAMES/SERVER_CITIES/
+# SERVER_COUNTRIES (see README.md, "Running multiple instances").
+#
+# Want no VPN? Use the separate docker-compose.novpn.yml.
+
+name: terrain-stitcher
+
+services:
+  # --- VPN gateway ----------------------------------------------------------
+  # Built-in Surfshark support, WireGuard protocol. Requires NET_ADMIN (to
+  # create the tunnel + firewall rules) and /dev/net/tun. If the host kernel
+  # has no WireGuard module, Gluetun falls back to the userspace implementation.
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      # Repo-root .env: WIREGUARD_* keys/address, USGS creds, default server.
+      - path: ../.env
+        required: false
+      # Optional per-instance override, e.g. VPN_ENV_FILE=../.env.sea.
+      # Paths are relative to this compose file; loading ../.env twice by
+      # default is harmless.
+      - path: ${VPN_ENV_FILE:-../.env}
+        required: false
+    environment:
+      VPN_SERVICE_PROVIDER: surfshark
+      VPN_TYPE: wireguard
+      # How often Gluetun refreshes its server list (through the VPN).
+      UPDATER_PERIOD: 480h
+    restart: unless-stopped
+
+  # --- App, routed through the VPN -----------------------------------------
+  terrain-stitcher:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: terrain-stitcher:latest
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        # Gluetun's image ships a healthcheck; wait until the tunnel is up so
+        # the first request isn't dropped by the kill switch.
+        condition: service_healthy
+    working_dir: /data
+    volumes:
+      # Repo root is mounted at /data. Override per run with a different data
+      # directory: `docker compose ... run -v <host-path>:/data ...`.
+      - ..:/data
+    env_file:
+      - path: ../.env
+        required: false

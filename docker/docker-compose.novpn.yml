@@ -1,0 +1,29 @@
+# Terrain-Stitcher without a VPN.
+#
+# Standalone stack: no Gluetun, no network_mode. Use this to download directly
+# over your normal connection. All shared config lives in the repo-root .env.
+#
+# Run from the repository root:
+#   docker compose -f docker/docker-compose.novpn.yml run --rm terrain-stitcher refresh-services
+# ...or from inside this directory:
+#   cd docker && docker compose -f docker-compose.novpn.yml run --rm terrain-stitcher refresh-services
+#
+# For the Surfshark/Gluetun VPN variant, use docker-compose.yml.
+
+name: terrain-stitcher-novpn
+
+services:
+  terrain-stitcher:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: terrain-stitcher:latest
+    working_dir: /data
+    volumes:
+      # Repo root is mounted at /data. Override per run with a different data
+      # directory: `docker compose -f docker/docker-compose.novpn.yml run -v <host-path>:/data ...`.
+      - ..:/data
+    env_file:
+      # Repo-root .env: only the USGS credentials matter here.
+      - path: ../.env
+        required: false

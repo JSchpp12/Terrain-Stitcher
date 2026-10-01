@@ -1,3 +1,7 @@
+# Dockerfile-specific ignore file (BuildKit looks for
+# <Dockerfile>.dockerignore next to the Dockerfile). The build context is the
+# repository root, so paths below are relative to it.
+
 # Version control / editor
 .git
 .gitignore
@@ -20,9 +24,10 @@ src/tmpDownloads/
 weathercams/
 *.zip
 *.txt
-.env
 
-# Docker files themselves
-Dockerfile
-docker-compose.yml
-.dockerignore
+# Secrets / environment files
+.env
+.env.*
+
+# Docker files themselves (kept out of the build context)
+docker/
