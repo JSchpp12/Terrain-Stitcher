@@ -1,7 +1,8 @@
 # Terrain-Stitcher without a VPN.
 #
 # Standalone stack: no Gluetun, no network_mode. Use this to download directly
-# over your normal connection. All shared config lives in the repo-root .env.
+# over your normal connection. It reads the repo-root .env too, but only the
+# USGS credentials apply; the Surfshark/WireGuard settings are ignored.
 #
 # Run from the repository root:
 #   docker compose -f docker/docker-compose.novpn.yml run --rm terrain-stitcher refresh-services
@@ -21,9 +22,9 @@ services:
     working_dir: /data
     volumes:
       # Repo root is mounted at /data. Override per run with a different data
-      # directory: `docker compose -f docker/docker-compose.novpn.yml run -v <host-path>:/data ...`.
+      # directory: `docker compose ... run -v <host-path>:/data ...`.
       - ..:/data
     env_file:
-      # Repo-root .env: only the USGS credentials matter here.
+      # Repo-root .env: the app only uses the optional USGS credentials.
       - path: ../.env
         required: false

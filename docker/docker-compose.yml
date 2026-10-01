@@ -5,15 +5,16 @@
 # firewall is a kill switch: if the tunnel drops the app loses network access
 # instead of leaking over your ISP.
 #
-# All shared config lives in the repo-root .env. Run from the repository root:
+# All configuration lives in the git-ignored repo-root .env (Surfshark/WireGuard
+# credentials, target server, and the optional USGS credentials). Create it
+# from the tracked example:
+#   cp .env.example .env
+#
+# Run from the repository root:
 #   docker compose -f docker/docker-compose.yml build
 #   docker compose -f docker/docker-compose.yml run --rm terrain-stitcher refresh-services
 # ...or from inside this directory:
 #   cd docker && docker compose run --rm terrain-stitcher refresh-services
-#
-# To target a different endpoint per simultaneous instance, point VPN_ENV_FILE
-# at another env file that overrides SERVER_HOSTNAMES/SERVER_CITIES/
-# SERVER_COUNTRIES (see README.md, "Running multiple instances").
 #
 # Want no VPN? Use the separate docker-compose.novpn.yml.
 
@@ -31,14 +32,11 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
     env_file:
-      # Repo-root .env: WIREGUARD_* keys/address, USGS creds, default server.
+      # Repo-root .env: the WIREGUARD_* key/address and the target server
+      # (plus the optional USGS credentials, which Gluetun ignores). Git-ignored,
+      # so the private key stays out of version control.
       - path: ../.env
-        required: false
-      # Optional per-instance override, e.g. VPN_ENV_FILE=../.env.sea.
-      # Paths are relative to this compose file; loading ../.env twice by
-      # default is harmless.
-      - path: ${VPN_ENV_FILE:-../.env}
-        required: false
+        required: true
     environment:
       VPN_SERVICE_PROVIDER: surfshark
       VPN_TYPE: wireguard
@@ -64,5 +62,6 @@ services:
       # directory: `docker compose ... run -v <host-path>:/data ...`.
       - ..:/data
     env_file:
+      # Repo-root .env: the app only uses the optional USGS credentials.
       - path: ../.env
         required: false

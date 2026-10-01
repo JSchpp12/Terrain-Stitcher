@@ -18,6 +18,11 @@ the example:
 cp .env.example .env
 ```
 
+It holds the Surfshark/WireGuard settings (used by the Gluetun gateway in the
+VPN stack) and the optional USGS credentials (used by the app). Each stack —
+and the local Python setup — ignores the settings that don't apply to it. The
+file is git-ignored, so the private key stays out of version control.
+
 The `Dockerfile` builds a self-contained image with everything the project needs
 at runtime:
 
@@ -92,7 +97,7 @@ There is also a separate no-VPN stack, `docker-compose.novpn.yml` (see
 4. Fill in the repo-root `.env`:
 
    ```env
-   WIREGUARD_PRIVATE_KEY=wOEI9rqqbDwnN8/Bpp22sVz48T71vJ4fYmFWujulwUU=
+   WIREGUARD_PRIVATE_KEY=<your-private-key>
    WIREGUARD_ADDRESSES=10.14.0.2/16
    SERVER_HOSTNAMES=us-den.prod.surfshark.com
    ```
@@ -132,16 +137,15 @@ docker compose -f docker/docker-compose.yml logs gluetun
 ### Notes
 
 - The WireGuard interface address (`WIREGUARD_ADDRESSES`) belongs to your
-  **keypair**, not the server, so it stays the same for every location. Only
-  the server selector changes per city.
+  **keypair**, not the server, so it stays the same for every location.
 - On Windows/Docker Desktop (WSL2) no kernel WireGuard module is needed;
   Gluetun falls back to the bundled userspace implementation. `/dev/net/tun`
   and `NET_ADMIN` are already set in the compose file.
-- After changing `.env`'s VPN values, recreate the gateway:
+- After changing the VPN values in `.env`, recreate the gateway:
   `docker compose -f docker/docker-compose.yml up -d --force-recreate gluetun`.
-- The WireGuard key can be reused across Surfshark servers. If you run many
-  **simultaneous** tunnels and Surfshark kicks one off, generate a separate
-  keypair per instance.
+  That includes switching endpoints: change `SERVER_HOSTNAMES` to another
+  hostname (e.g. `us-sea.prod.surfshark.com`) and recreate. Only one endpoint
+  is active at a time.
 
 ## No VPN
 
@@ -158,49 +162,6 @@ It reuses the same image and the same repo-root `.env`, but ignores the
 `WIREGUARD_*` settings. It runs under a different Compose project name
 (`terrain-stitcher-novpn`), so it can run alongside the VPN stack without
 colliding on containers or networks.
-
-## Running multiple instances (different VPN endpoints)
-
-Use the same compose file under a different Compose **project name** (`-p`)
-plus a small override env file that changes the server. The shared secrets stay
-in the repo-root `.env`; the override only needs the server selector. Point
-`VPN_ENV_FILE` at it (paths are relative to this `docker/` directory):
-
-```env
-# .env.sea  (in the repo root)
-SERVER_HOSTNAMES=us-sea.prod.surfshark.com
-```
-
-```bash
-# Instance A -> keep the default from .env (e.g. us-ash)
-docker compose -f docker/docker-compose.yml -p ts-ash run --rm terrain-stitcher refresh-services
-docker compose -f docker/docker-compose.yml -p ts-ash run --rm terrain-stitcher \
-  process-terrain --name ash -s Shape.json -d 75 --lod 12
-
-# Instance B -> Seattle, overridden via VPN_ENV_FILE
-VPN_ENV_FILE=../.env.sea docker compose -f docker/docker-compose.yml -p ts-sea run --rm \
-  terrain-stitcher process-terrain --name seattle -s Shape.json -d 75 --lod 12
-```
-
-On Windows PowerShell set the variable first:
-
-```powershell
-$env:VPN_ENV_FILE = "../.env.sea"
-docker compose -f docker/docker-compose.yml -p ts-sea run --rm terrain-stitcher process-terrain ...
-```
-
-Stop a whole instance (and its Gluetun container) with:
-
-```bash
-docker compose -f docker/docker-compose.yml -p ts-sea down
-```
-
-Tips:
-
-- Give each parallel instance its own data directory (via `-v`) to keep
-  outputs separate; a shared directory is fine but outputs must use different
-  `--name`s.
-- Only the server selector needs to differ per instance.
 
 ## WeatherCams
 
@@ -242,8 +203,8 @@ docker compose -f docker/docker-compose.yml build
 ```
 
 If you prefer live code edits without rebuilding, run an interactive shell with
-the repo mounted (add `-f docker/docker-compose.novpn.yml` to skip the VPN):
+the repo mounted:
 
 ```bash
-docker compose -f docker/docker-compose.yml run --rm --entrypoint bash terrain-stitcher
+docker compose -f docker/docker-compose.novpn.yml run --rm --entrypoint bash terrain-stitcher
 ```

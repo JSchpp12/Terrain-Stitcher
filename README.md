@@ -134,9 +134,17 @@ python -m pip install rasterio pillow pyproj shapely rtree beautifulsoup4 reques
 
 ## Setup
 
-Create a `.env` file with:
+Create a `.env` file with your optional USGS credentials (it is git-ignored;
+copy `.env.example` for the full template):
+
+```env
 USGS_APPLICATION_KEY=your_api_key_here
 USGS_USERNAME=
+```
+
+The same file holds the Surfshark/WireGuard settings for the Docker VPN stack
+— see [docker/README.md](docker/README.md). They are only needed for the USGS
+ortho source; ArcGIS/elevation work without them.
 
 ### Troubleshooting
 
