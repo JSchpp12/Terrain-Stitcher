@@ -1,0 +1,28 @@
+# Version control / editor
+.git
+.gitignore
+.vscode
+
+# Python virtualenvs and caches (host-specific)
+.venv
+.uv-cache
+__pycache__
+*.py[cod]
+.pytest_cache
+*.egg-info
+
+# Build artifacts / local data that should not be baked into the image
+result/
+terrains/
+data/
+media/
+src/tmpDownloads/
+weathercams/
+*.zip
+*.txt
+.env
+
+# Docker files themselves
+Dockerfile
+docker-compose.yml
+.dockerignore

@@ -203,7 +203,10 @@ def _select_site_ids(
         if key not in ledger:
             raise ValueError(f"Unknown WeatherCams site ID {only_site}")
         if ledger[key]:
-            return []
+            raise ValueError(
+                f"WeatherCams site {only_site} is already complete. "
+                f"Run weathercams-retry --site {only_site} first to process it again."
+            )
         return [only_site]
 
     site_ids = pending_site_ids(ledger)

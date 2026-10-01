@@ -10,3 +10,5 @@ src/tmpDownloads/
 *.zip
 *.txt
 .pytest_cache/
+.cache/
+.docker-test/

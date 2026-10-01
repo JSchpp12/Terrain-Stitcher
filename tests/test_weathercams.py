@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from terrain_stitcher.weathercams.client import WeathercamSite
 from terrain_stitcher.weathercams.ledger import (
     export_weathercam_ledger,
@@ -171,6 +173,48 @@ def test_run_weathercams_processes_pending_site_and_marks_complete(tmp_path):
     assert (
         output_root / "weathercam_133_12" / "gathered_r0_c0.png"
     ).is_file()
+
+
+def test_run_weathercams_only_site_processes_requested_site(tmp_path):
+    ledger_path = tmp_path / "ledger.json"
+    shape_dir = tmp_path / "shapes"
+    output_root = tmp_path / "outputs"
+
+    synchronize_weathercam_ledger(ledger_path, [133, 254])
+    _write_shape(shape_dir, 254)
+
+    result = run_weathercams(
+        ledger_path=ledger_path,
+        shape_dir=shape_dir,
+        output_root=output_root,
+        options=ProcessTerrainOptions(dimension=2, lod=12),
+        only_site=254,
+        process_terrain=_fake_process_terrain,
+    )
+
+    assert result.processed_site_ids == [254]
+    assert result.failed_site_ids == []
+    assert load_weathercam_ledger(ledger_path) == {"133": False, "254": True}
+
+
+def test_run_weathercams_only_site_rejects_completed_site(tmp_path):
+    ledger_path = tmp_path / "ledger.json"
+    shape_dir = tmp_path / "shapes"
+    output_root = tmp_path / "outputs"
+
+    synchronize_weathercam_ledger(ledger_path, [254])
+    mark_site_complete(ledger_path, 254)
+    _write_shape(shape_dir, 254)
+
+    with pytest.raises(ValueError, match="already complete"):
+        run_weathercams(
+            ledger_path=ledger_path,
+            shape_dir=shape_dir,
+            output_root=output_root,
+            options=ProcessTerrainOptions(dimension=2, lod=12),
+            only_site=254,
+            process_terrain=_fake_process_terrain,
+        )
 
 
 def test_manual_complete_and_retry(tmp_path):

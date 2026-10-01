@@ -256,7 +256,10 @@ def _add_run_command(subparsers: argparse._SubParsersAction) -> None:
         "--only-site",
         type=int,
         default=None,
-        help="Process only this site ID, if it is still incomplete",
+        help=(
+            "Process only this site ID; if it is already complete, "
+            "run weathercams-retry first"
+        ),
     )
     command.add_argument(
         "--limit",

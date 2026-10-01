@@ -97,6 +97,18 @@ This replaces the manual `download-arcgis` -> `gather-ortho` sequence in
 
 ## Requirements
 
+### Docker (recommended)
+
+A self-contained image (Python, GDAL, `gdal2tiles`, and all Python
+requirements) is provided. See [DOCKER.md](DOCKER.md).
+
+```bash
+docker build -t terrain-stitcher:latest .
+docker run --rm -v "$PWD:/data" terrain-stitcher:latest refresh-services
+```
+
+### Local Python
+
 The following python packages are required: 
 - rasterio
 - pillow
