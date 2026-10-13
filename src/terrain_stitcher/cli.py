@@ -377,10 +377,14 @@ def addDownloadElevationArgs(subparser):
         description=(
             "Download a continuous Float32 elevation GeoTIFF over the shape "
             "AOI from a registered elevation ArcGIS service (e.g. USGS 3DEP). "
-            "The AOI is fetched as georeferenced F32 TIFF chunks, verified, "
-            "mosaicked, and written as a single merged GeoTIFF. Unlike "
-            "download-arcgis there is no gdal2tiles pass -- elevation is a "
-            "continuous raster, not a tile pyramid."
+            "The AOI is fetched as georeferenced F32 TIFF chunks anchored to "
+            "the standard Web Mercator tile grid, verified, mosaicked, and "
+            "written as a single merged GeoTIFF in EPSG:3857 -- pixel-for-pixel "
+            "aligned with the ortho tile pyramid at the same LOD, with no "
+            "client-side resampling. A twin elevation_merged_info.json "
+            "sidecar records the projection system. Unlike download-arcgis "
+            "there is no gdal2tiles pass -- elevation is a continuous raster, "
+            "not a tile pyramid."
         ),
     )
 
@@ -402,19 +406,24 @@ def addDownloadElevationArgs(subparser):
         help=(
             "Path to write the single merged elevation GeoTIFF (default: "
             "elevation_merged.tif). The output is a Float32 continuous raster "
-            "in the service's SRS (Web Mercator), suitable for prep-geo / "
-            "gather-ortho -e consumption."
+            "in EPSG:3857 on the Web Mercator tile grid, 1:1 aligned with "
+            "ortho tiles at the same LOD. A matching <name>_info.json sidecar "
+            "records the projection system."
         ),
     )
     parserGenerate.add_argument(
-        "--res",
-        type=float,
+        "--lod",
+        type=int,
         default=None,
         help=(
-            "Fetch resolution in m/px (default: the service's registered "
-            "native pixel size). Requesting a finer resolution than native "
-            "prints a warning -- 3DEP resamples on the fly, so the extra "
-            "detail is interpolated, not real."
+            "Web Mercator level of detail to fetch at: the pixel size is "
+            "156543.03392804097 / 2^lod m/px, the same grid the ortho tile "
+            "pyramid uses, so elevation pixels align 1:1 with ortho tile "
+            "pixels at the same LOD (default: the LOD closest to the "
+            "service's native resolution, ~LOD 14 for 3DEP's 10 m/px). "
+            "Requesting an LOD finer than native prints a warning -- 3DEP "
+            "resamples on the fly, so the extra detail is interpolated, not "
+            "real."
         ),
     )
     parserGenerate.add_argument(
@@ -1044,7 +1053,7 @@ def main():
         main_elevation(
             shape_file=args.shape,
             outdir=args.output,
-            res=args.res,
+            lod=args.lod,
             timeout=args.timeout,
             num_workers=args.workers,
             chunk_px=args.chunk_px,

@@ -174,6 +174,21 @@ chunks over the shape AOI and mosaics them into one continuous GeoTIFF
 (`elevation_merged.tif`) that feeds the existing `gather-ortho -src arcgis -e`
 / `prep-geo` pipeline.
 
+The chunks are anchored to the standard Web Mercator tile grid instead of the
+AOI bbox corner, so the merged GeoTIFF is EPSG:3857 and is pixel-for-pixel
+aligned with the ortho tile pyramid at the same LOD: elevation pixel `(i, j)`
+corresponds exactly to ortho tile pixel `(i, j)`, with no reprojection or
+resampling anywhere on the client. The raster covers the tile-aligned
+envelope of the (padded) AOI, slightly larger than the shape region itself,
+just like the ortho pyramid. A twin `elevation_merged_info.json` sidecar next
+to the GeoTIFF records the projection system, so renderers never have to
+guess between projected meters (EPSG:3857) and degrees (EPSG:4326).
+
+> Web Mercator stretches ground distances by 1/cos(latitude): at 65°N a pixel
+> is ~2.37x wider than its true ground size. Apply a horizontal cos(lat)
+> correction at the render site; the elevation values themselves are
+> unaffected.
+
 ### Prereqs: build the service registry
 
 The service registry (coverage + native resolution + capability kinds per
@@ -193,9 +208,12 @@ Options:
 
 - `-s/--shape` (required): shape file defining the AOI.
 - `-o/--output`: path for the merged GeoTIFF (default `elevation_merged.tif`).
-- `--res <m/px>`: fetch resolution (defaults to the service's registered
-  native pixel size, 10.0 m for 3DEP). A finer value only warns, since 3DEP
-  resamples on the fly.
+- `--lod <N>`: Web Mercator level of detail to fetch at. The pixel size is
+  156543.03392804097 / 2^lod m/px -- the same grid the ortho tile pyramid
+  uses -- so elevation pixels align 1:1 with ortho tile pixels at the same
+  LOD. Defaults to the LOD closest to the service's native resolution (~LOD
+  14 for 3DEP's 10 m/px). A finer LOD only warns, since 3DEP resamples on
+  the fly (the extra detail is interpolated, not real).
 - `--chunk-px`, `--timeout`, `-w/--workers`: download tuning (same defaults
   as `download-arcgis`).
 - `--service-index <N>`: pick one when several elevation services cover the AOI.
@@ -205,3 +223,14 @@ Options:
 picks the elevation endpoint. `download-elevation` never produces a tile
 pyramid; elevation is a continuous raster, so it writes a single merged
 GeoTIFF instead of running gdal2tiles.
+
+### Merging elevation into a gather (prep-geo / gather-ortho -e)
+
+`prep-geo` and `gather-ortho -e` detect when every intersecting source
+already sits on the Web Mercator tile grid (which `download-elevation`
+produces) and composite those sources directly on that grid: the merged
+output stays EPSG:3857 and stays 1:1 aligned with the ortho tiles, with no
+reprojection or resampling. Heterogeneous inputs (e.g. mixed USGS tiles in
+various CRSs) keep the legacy behavior of warping everything into one
+continuous EPSG:4326 GeoTIFF. Both paths write the
+`elevation_merged_info.json` sidecar recording which projection was used.

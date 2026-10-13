@@ -5,12 +5,12 @@ from enum import Enum
 
 import xml.etree.ElementTree as ET
 
-
-@dataclass()
-class LevelOfDetailInfo:
-    level_id: int
-    scale: float
-    resolution: float
+from terrain_stitcher.arcgis.level_of_detail import (
+    WEB_MERCATOR_INITIAL_RESOLUTION,
+    WEB_MERCATOR_WORLD_X_MIN,
+    WEB_MERCATOR_WORLD_Y_MAX,
+    LevelOfDetailInfo,
+)
 
 
 @dataclass()
@@ -137,11 +137,9 @@ class TileSchemeInfo:
         if dpi <= 0:
             raise ValueError("dpi must be > 0")
 
-        initial_resolution = 156543.03392804097
-
         levels: list[LevelOfDetailInfo] = []
         for level_id in range(min_level, max_level + 1):
-            resolution = initial_resolution / (2**level_id)
+            resolution = WEB_MERCATOR_INITIAL_RESOLUTION / (2**level_id)
 
             # ArcGIS conf.xml scale convention:
             # scale denominator = ground_resolution_m_per_px * dpi / meters_per_inch
@@ -158,8 +156,8 @@ class TileSchemeInfo:
         return cls(
             wkid=102100,
             latest_wkid=3857,
-            tile_origin_x=-20037508.342787001,
-            tile_origin_y=20037508.342787001,
+            tile_origin_x=WEB_MERCATOR_WORLD_X_MIN,
+            tile_origin_y=WEB_MERCATOR_WORLD_Y_MAX,
             tile_cols=tile_size,
             tile_rows=tile_size,
             dpi=dpi,

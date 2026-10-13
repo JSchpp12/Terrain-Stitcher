@@ -7,9 +7,19 @@ pipeline. It is exposed as the ``prep-geo`` CLI command.
 
 The target region (coverage) comes from a Shape.json file (the same format used
 by ``create-bounds``/``prep-ortho``), and every ``.tif`` in the supplied
-elevation directory is considered as a candidate tile. Tiles that do not
-overlap the target are ignored; tiles that overlap are reprojected+clipped to a
-shared EPSG:4326 frame and composited (first valid pixel wins) into the output.
+elevation directory is considered as a candidate tile. There are two merge
+strategies:
+
+- If every intersecting source already sits on the standard Web Mercator tile
+  grid (which is what ``download-elevation`` produces), the sources are
+  composited directly on that grid: the output stays in EPSG:3857 and stays
+  pixel-for-pixel aligned with the ortho tile pyramid, with no reprojection
+  or resampling anywhere.
+- Otherwise tiles are reprojected+clipped to a shared EPSG:4326 frame and
+  composited (first valid pixel wins) into the output, as before.
+
+In both cases a twin ``<name>_info.json`` sidecar records the projection system
+used for the merged GeoTIFF.
 
 The merge is implemented with rasterio (the project's existing raster stack)
 rather than the historical ``osgeo.gdal`` code, but the coverage/grouping
@@ -17,18 +27,33 @@ helpers are a direct port of the original logic so behavior matches.
 """
 
 import logging
+import math
 import os
 
 import numpy as np
 import rasterio
+import rasterio.crs
 from rasterio.enums import Resampling
 from rasterio.transform import from_origin
 from rasterio.warp import reproject, transform_bounds
+from rasterio.windows import Window
 
+from terrain_stitcher.arcgis.level_of_detail import (
+    WEB_MERCATOR_TILE_PX,
+    WEB_MERCATOR_WORLD_X_MIN,
+    WEB_MERCATOR_WORLD_Y_MAX,
+    pixel_size_for_zoom,
+    tile_grid_envelope,
+    web_mercator_lod_for_res,
+)
 from terrain_stitcher.common import (
     ParseArea,
     World_Bounding_Box,
     World_Coordinates,
+)
+from terrain_stitcher.common.ElevationFileInfo import (
+    ElevationFileInfo,
+    write_elevation_info,
 )
 from terrain_stitcher.util import (
     find_files_with_extension,
@@ -40,6 +65,10 @@ log = logging.getLogger(__name__)
 # All merging happens in WGS84 geographic coordinates so the output is a single
 # continuous GeoTIFF regardless of the source tiles' native CRS.
 TARGET_CRS = "EPSG:4326"
+# Sources produced by download-elevation are on the standard Web Mercator tile
+# grid (EPSG:3857); those are composited without reprojection so they stay 1:1
+# aligned with the ortho tile pyramid.
+ALIGNED_CRS = "EPSG:3857"
 # Degrees of padding added around the target bounds when clipping, mirroring
 # the ~1km-at-mid-latitudes padding used by the old gdal-based flow. Keeps
 # downstream consumers from seeing NoData exactly at the region edge.
@@ -289,6 +318,165 @@ def _target_resolution(intersecting: list, target: World_Bounding_Box):
     return res_x, res_y
 
 
+def _aligned_web_mercator_lod(intersecting: list) -> int | None:
+    """Shared Web Mercator LOD when every source already sits on the tile grid.
+
+    A raster counts as grid-aligned when its CRS is EPSG:3857, it is north-up,
+    its pixel size is exactly the Web Mercator resolution at some integer LOD,
+    and its origin lands on a whole world-grid pixel line -- which is exactly
+    what ``download-elevation`` produces. Anything else returns ``None`` so
+    the legacy reprojection path takes over.
+    """
+    lod = None
+    for ed in intersecting:
+        with rasterio.open(ed.srcFilePath) as ds:
+            if ds.crs is None or ds.crs != rasterio.crs.CRS.from_epsg(3857):
+                return None
+            res_x, res_y = ds.res
+            if res_x <= 0 or res_y <= 0 or not math.isclose(res_x, res_y, rel_tol=1e-9):
+                return None
+            t = ds.transform
+            if t.b != 0 or t.d != 0:
+                return None  # rotated rasters are never on the grid
+            file_lod = web_mercator_lod_for_res(res_x)
+            if file_lod is None:
+                return None
+            # The origin must sit on the world grid (origin + n pixels).
+            x_off = (ds.bounds.left - WEB_MERCATOR_WORLD_X_MIN) / res_x
+            y_off = (WEB_MERCATOR_WORLD_Y_MAX - ds.bounds.top) / res_y
+            if abs(x_off - round(x_off)) > 1e-3 or abs(y_off - round(y_off)) > 1e-3:
+                return None
+            if lod is None:
+                lod = file_lod
+            elif file_lod != lod:
+                return None
+    return lod
+
+
+def _aligned_band_contract(intersecting: list) -> tuple:
+    """Shared (count, dtype) across all sources, matching the mosaic contract."""
+    with rasterio.open(intersecting[0].srcFilePath) as ref:
+        count = ref.count
+        dtype = ref.dtypes[0]
+    for ed in intersecting:
+        with rasterio.open(ed.srcFilePath) as ds:
+            if ds.count != count or ds.dtypes[0] != dtype:
+                raise ValueError(
+                    f"Elevation tile band/dtype mismatch: {ed.srcFilePath} "
+                    f"has {ds.count}x{ds.dtypes[0]}, expected {count}x{dtype}"
+                )
+    return count, dtype
+
+
+def _mosaic_aligned(
+    intersecting: list,
+    outputPath: str,
+    target: World_Bounding_Box,
+    padding_deg: float,
+    lod: int,
+) -> str:
+    """Composite grid-aligned sources without any reprojection or resampling.
+
+    Every source sits on the standard Web Mercator tile grid at *lod*, so the
+    output frame is the tile-aligned envelope of the padded target bounds
+    (rounded outward to whole 256-px tiles, like the ortho pyramid) and each
+    source pixel maps 1:1 onto an output pixel via integer window reads.
+    First valid pixel wins, matching the legacy composite. The output stays
+    in EPSG:3857, aligned with ortho tiles of the same LOD.
+    """
+    if not intersecting:
+        raise ValueError("No elevation files intersect the target region")
+
+    west, south, east, north = _padded_bounds(target, padding_deg)
+    xmin, ymin, xmax, ymax = transform_bounds(
+        TARGET_CRS, ALIGNED_CRS, west, south, east, north
+    )
+    (
+        env_xmin,
+        env_ymin,
+        env_xmax,
+        env_ymax,
+        _col0,
+        _row0,
+        tile_cols,
+        tile_rows,
+    ) = tile_grid_envelope(xmin, ymin, xmax, ymax, lod)
+
+    res = pixel_size_for_zoom(lod)
+    width = tile_cols * WEB_MERCATOR_TILE_PX
+    height = tile_rows * WEB_MERCATOR_TILE_PX
+    if width <= 0 or height <= 0:
+        raise ValueError(
+            f"Computed output grid is empty ({width}x{height}); check target "
+            f"bounds and padding."
+        )
+    dst_transform = from_origin(env_xmin, env_ymax, res, res)
+
+    count, dtype = _aligned_band_contract(intersecting)
+
+    nodata = _resolve_nodata(np.dtype(dtype))
+    out = np.full((count, height, width), nodata, dtype=dtype)
+
+    for ed in intersecting:
+        with rasterio.open(ed.srcFilePath) as src:
+            # Aligned grids: the source sits at an integer pixel offset in
+            # the output frame. Clip the overlap to the frame edges and copy
+            # pixels straight over -- no reprojection, no resampling.
+            x_off = int(round((src.bounds.left - env_xmin) / res))
+            y_off = int(round((env_ymax - src.bounds.top) / res))
+            dst_x0, dst_x1 = max(0, x_off), min(width, x_off + src.width)
+            dst_y0, dst_y1 = max(0, y_off), min(height, y_off + src.height)
+            if dst_x0 >= dst_x1 or dst_y0 >= dst_y1:
+                continue  # source only pokes outside the frame
+            src_win = Window(
+                dst_x0 - x_off,
+                dst_y0 - y_off,
+                dst_x1 - dst_x0,
+                dst_y1 - dst_y0,
+            )
+            tmp = src.read(window=src_win)
+
+            region = out[:, dst_y0:dst_y1, dst_x0:dst_x1]
+            if np.issubdtype(np.dtype(dtype), np.floating):
+                valid = ~np.isnan(tmp)
+                unfilled = np.isnan(region)
+            else:
+                valid = np.ones(tmp.shape, dtype=bool)
+                unfilled = region == nodata
+            if src.nodata is not None:
+                valid &= tmp != src.nodata
+            region[...] = np.where(valid & unfilled, tmp, region)
+
+    profile = {
+        "driver": "GTiff",
+        "height": height,
+        "width": width,
+        "count": count,
+        "dtype": dtype,
+        "crs": ALIGNED_CRS,
+        "transform": dst_transform,
+        "tiled": True,
+        "compress": "lzw",
+    }
+    if np.issubdtype(np.dtype(dtype), np.floating):
+        profile["nodata"] = float("nan")
+
+    os.makedirs(os.path.dirname(os.path.abspath(outputPath)), exist_ok=True)
+    with rasterio.open(outputPath, "w", **profile) as dst:
+        dst.write(out)
+
+    write_star_ignore_marker(outputPath)
+    write_elevation_info(outputPath, ElevationFileInfo(projection=ALIGNED_CRS))
+    log.info(
+        "Composited %d aligned tile(s) at LOD %d -> %s (no reprojection; "
+        "1:1 with the ortho tile grid)",
+        len(intersecting),
+        lod,
+        outputPath,
+    )
+    return outputPath
+
+
 def mosaicElevationFiles(
     intersecting: list,
     outputPath: str,
@@ -384,6 +572,7 @@ def mosaicElevationFiles(
     # Pair the created GeoTIFF with an empty .star_ignore_<name> marker so
     # downstream directory scans can ignore the tif next to its sibling.
     write_star_ignore_marker(outputPath)
+    write_elevation_info(outputPath, ElevationFileInfo(projection=TARGET_CRS))
     log.info("Mosaicked %d tile(s) -> %s", len(intersecting), outputPath)
     return outputPath
 
@@ -431,6 +620,22 @@ def main(
         log.warning(
             "Available GeoTIFF files do not fully cover the requested region. "
             "The merged output may contain NoData pixels near the edges."
+        )
+
+    # Fast path: when every intersecting source already sits on the Web
+    # Mercator tile grid (download-elevation output), composite on that grid
+    # so the merged GeoTIFF stays EPSG:3857 and 1:1 aligned with the ortho tile
+    # pyramid. Anything heterogeneous falls back to the legacy 4326 warp.
+    aligned_lod = _aligned_web_mercator_lod(intersectingData)
+    if aligned_lod is not None:
+        log.info(
+            "All %d source GeoTIFF(s) are on the Web Mercator tile grid "
+            "(LOD %d) -- merging without reprojection.",
+            len(intersectingData),
+            aligned_lod,
+        )
+        return _mosaic_aligned(
+            intersectingData, outputFile, targetArea, padding_deg, aligned_lod
         )
 
     return mosaicElevationFiles(intersectingData, outputFile, targetArea, padding_deg)

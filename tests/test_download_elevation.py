@@ -2,7 +2,18 @@ import json
 
 import pytest
 
-from terrain_stitcher.arcgis.services import ImageryService
+from terrain_stitcher.arcgis.level_of_detail import (
+    WEB_MERCATOR_TILE_PX,
+    WEB_MERCATOR_WORLD_X_MIN,
+    WEB_MERCATOR_WORLD_Y_MAX,
+    native_lod_for_service,
+    pixel_size_for_zoom,
+)
+from terrain_stitcher.arcgis.services import (
+    ImageryService,
+    bbox_latlon_from_radius,
+)
+from terrain_stitcher.common.ElevationFileInfo import elevation_info_path
 from terrain_stitcher.functions import (
     DownloaderBase,
     ElevationDownloader,
@@ -97,7 +108,7 @@ def test_download_elevation_fetches_f32_tiff(monkeypatch, tmp_path):
     ElevationDownloader.download_elevation(
         shapefile_path=str(_shape(tmp_path)),
         outdir=str(out),
-        res=30.0,
+        lod=12,
         num_workers=1,
     )
 
@@ -110,21 +121,25 @@ def test_download_elevation_fetches_f32_tiff(monkeypatch, tmp_path):
     mosaic_calls = [c for c in calls if c[0] == "build_mosaic"]
     assert mosaic_calls and mosaic_calls[0][1] >= 1
     assert ("translate", str(out)) in calls
+    # A twin info sidecar records the projection system.
+    info = elevation_info_path(out)
+    assert info.is_file()
+    assert json.loads(info.read_text())["projection"] == "EPSG:3857"
 
 
-def test_download_elevation_default_res_uses_service_native(monkeypatch, tmp_path):
-    """With no --res, the chunk grid resolution defaults to the service's
-    registered native pixel size."""
+def test_download_elevation_default_lod_uses_service_native(monkeypatch, tmp_path):
+    """With no --lod, the fetch LOD defaults to the one closest to the
+    service's registered native pixel size."""
     service = _elev_service()
     monkeypatch.setattr(ElevationDownloader, "load_services", lambda: {"3dep": service})
     fake = _FakeSession()
     monkeypatch.setattr(requests, "Session", lambda: fake)
 
-    # Capture the resolution passed to build_chunk_grid.
+    # Capture the LOD passed to build_tile_aligned_chunk_grid.
     captured = {}
 
-    def fake_grid(xmin, ymin, xmax, ymax, chunk_px, pixel_size_m):
-        captured["res"] = pixel_size_m
+    def fake_grid(xmin, ymin, xmax, ymax, lod, chunk_px):
+        captured["lod"] = lod
         # single 1x1 chunk
         return [
             {
@@ -134,12 +149,12 @@ def test_download_elevation_default_res_uses_service_native(monkeypatch, tmp_pat
                 "h": 1,
                 "xmin": xmin,
                 "ymin": ymin,
-                "xmax": xmin + pixel_size_m,
-                "ymax": ymin + pixel_size_m,
+                "xmax": xmin + pixel_size_for_zoom(lod),
+                "ymax": ymin + pixel_size_for_zoom(lod),
             }
         ]
 
-    monkeypatch.setattr(ElevationDownloader, "build_chunk_grid", fake_grid)
+    monkeypatch.setattr(ElevationDownloader, "build_tile_aligned_chunk_grid", fake_grid)
 
     def fake_mosaic(chunk_paths, td, grid_shape=None, vrt_workers=None):
         vrt = td / "mosaic.vrt"
@@ -157,7 +172,128 @@ def test_download_elevation_default_res_uses_service_native(monkeypatch, tmp_pat
     ElevationDownloader.download_elevation(
         shapefile_path=str(_shape(tmp_path)), outdir=str(out), num_workers=1
     )
-    assert captured["res"] == 10.0
+    assert captured["lod"] == native_lod_for_service(service) == 14
+
+
+def test_download_elevation_lod_grid_is_tile_aligned(monkeypatch, tmp_path):
+    """Every exportImage request rectangle must sit on the standard Web
+    Mercator tile grid, so the merged GeoTIFF is 1:1 aligned with ortho
+    tiles at the same LOD (no bbox-corner-anchored pixels anywhere)."""
+    service = _elev_service()
+    monkeypatch.setattr(ElevationDownloader, "load_services", lambda: {"3dep": service})
+    fake = _FakeSession()
+    monkeypatch.setattr(requests, "Session", lambda: fake)
+
+    monkeypatch.setattr(
+        ElevationDownloader,
+        "build_mosaic",
+        lambda chunk_paths, td, grid_shape=None, vrt_workers=None: (
+            (td / "mosaic.vrt").write_text("vrt") or (td / "mosaic.vrt")
+        ),
+    )
+    monkeypatch.setattr(
+        ElevationDownloader,
+        "_translate_to_geotiff",
+        lambda v, o: o.write_bytes(b"geotiff") or o,
+    )
+
+    lod = 12
+    out = tmp_path / "elevation_merged.tif"
+    ElevationDownloader.download_elevation(
+        shapefile_path=str(_shape(tmp_path)),
+        outdir=str(out),
+        lod=lod,
+        num_workers=1,
+    )
+
+    assert fake.calls, "no exportImage requests were made"
+    res = pixel_size_for_zoom(lod)
+    tile_m = WEB_MERCATOR_TILE_PX * res
+
+    xmins, ymins, xmaxs, ymaxs = [], [], [], []
+    for params in fake.calls:
+        bbox = [float(v) for v in params["bbox"].split(",")]
+        w, h = (int(v) for v in params["size"].split(","))
+        cxmin, cymin, cxmax, cymax = bbox
+
+        def _on_grid(dist):
+            # Float modulo of a near-multiple can wrap to tile_m - eps.
+            return min(dist % tile_m, tile_m - dist % tile_m)
+
+        # Every edge lands on a tile-grid line (world origin + n tiles).
+        assert _on_grid(cxmin - WEB_MERCATOR_WORLD_X_MIN) == pytest.approx(0, abs=1e-6)
+        assert _on_grid(cxmax - WEB_MERCATOR_WORLD_X_MIN) == pytest.approx(0, abs=1e-6)
+        assert _on_grid(WEB_MERCATOR_WORLD_Y_MAX - cymax) == pytest.approx(0, abs=1e-6)
+        assert _on_grid(WEB_MERCATOR_WORLD_Y_MAX - cymin) == pytest.approx(0, abs=1e-6)
+        # ...and the request size matches the rectangle exactly, so the
+        # server's pixels land on the tile grid with no resampling.
+        assert (cxmax - cxmin) / w == pytest.approx(res)
+        assert (cymax - cymin) / h == pytest.approx(res)
+        xmins.append(cxmin)
+        ymins.append(cymin)
+        xmaxs.append(cxmax)
+        ymaxs.append(cymax)
+
+    # The tile-aligned envelope must cover the projected AOI bbox.
+    min_lat, min_lon, max_lat, max_lon = bbox_latlon_from_radius(40.0, -90.0, 5.0)
+    aoi_xmin, aoi_ymin = DownloaderBase.WGS84_TO_WEBMERC.transform(min_lon, min_lat)
+    aoi_xmax, aoi_ymax = DownloaderBase.WGS84_TO_WEBMERC.transform(max_lon, max_lat)
+    assert min(xmins) <= aoi_xmin and max(xmaxs) >= aoi_xmax
+    assert min(ymins) <= aoi_ymin and max(ymaxs) >= aoi_ymax
+
+    assert out.is_file()
+
+
+def test_download_elevation_lod_finer_than_native_warns(monkeypatch, tmp_path, capsys):
+    """An LOD finer than the service's native ~LOD warns (no hard fail),
+    matching the elevation semantics; a coarser LOD stays silent."""
+    service = _elev_service()  # native 10 m/px -> ~LOD 14
+    monkeypatch.setattr(ElevationDownloader, "load_services", lambda: {"3dep": service})
+    monkeypatch.setattr(requests, "Session", lambda: _FakeSession())
+
+    monkeypatch.setattr(
+        ElevationDownloader,
+        "build_tile_aligned_chunk_grid",
+        lambda xmin, ymin, xmax, ymax, lod, chunk_px: [
+            {
+                "row": 0,
+                "col": 0,
+                "w": 1,
+                "h": 1,
+                "xmin": xmin,
+                "ymin": ymin,
+                "xmax": xmax,
+                "ymax": ymax,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        ElevationDownloader,
+        "build_mosaic",
+        lambda chunk_paths, td, grid_shape=None, vrt_workers=None: (
+            (td / "mosaic.vrt").write_text("vrt") or (td / "mosaic.vrt")
+        ),
+    )
+    monkeypatch.setattr(
+        ElevationDownloader,
+        "_translate_to_geotiff",
+        lambda v, o: o.write_bytes(b"geotiff") or o,
+    )
+
+    out = tmp_path / "finer.tif"
+    ElevationDownloader.download_elevation(
+        shapefile_path=str(_shape(tmp_path)), outdir=str(out), lod=15, num_workers=1
+    )
+    out_text = capsys.readouterr().out
+    assert "LOD 15" in out_text
+    assert "finer than" in out_text
+    assert "interpolated" in out_text
+
+    out2 = tmp_path / "coarser.tif"
+    ElevationDownloader.download_elevation(
+        shapefile_path=str(_shape(tmp_path)), outdir=str(out2), lod=12, num_workers=1
+    )
+    assert "finer than" not in capsys.readouterr().out
 
 
 def test_download_elevation_ambiguous_prints_list_and_exits(

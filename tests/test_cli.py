@@ -111,3 +111,42 @@ def test_cli_download_elevation_forwards_service_index(monkeypatch, tmp_path):
     cli_mod.main()
 
     assert captured.get("service_index") == 1
+
+
+def test_cli_download_elevation_forwards_lod_and_rejects_res(monkeypatch, tmp_path):
+    """--lod threads through to main_elevation; the removed --res knob is
+    rejected so stale invocations fail loudly instead of silently fetching
+    at an unintended resolution."""
+    shape = _shape_file(tmp_path)
+    captured = {}
+    monkeypatch.setattr(
+        cli_mod, "main_elevation", lambda **kw: captured.update(kw) or None
+    )
+
+    argv = [
+        "prog",
+        "download-elevation",
+        "-s",
+        str(shape),
+        "-o",
+        str(tmp_path / "elev.tif"),
+        "--lod",
+        "12",
+    ]
+    monkeypatch.setattr("sys.argv", argv)
+    cli_mod.main()
+
+    assert captured.get("lod") == 12
+
+    argv = [
+        "prog",
+        "download-elevation",
+        "-s",
+        str(shape),
+        "--res",
+        "30.0",
+    ]
+    monkeypatch.setattr("sys.argv", argv)
+    with pytest.raises(SystemExit) as ei:
+        cli_mod.main()
+    assert ei.value.code == 2  # argparse usage error

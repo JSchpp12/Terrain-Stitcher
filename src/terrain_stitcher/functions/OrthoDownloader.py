@@ -7,6 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from terrain_stitcher.arcgis.level_of_detail import (
+    native_lod_for_service,
+    pixel_size_for_zoom,
+)
 from terrain_stitcher.arcgis.services import (
     ImageryService,
     bbox_latlon_from_radius,
@@ -21,27 +25,16 @@ from .DownloaderBase import (
     build_mosaic,
 )
 
-
-def pixel_size_for_zoom(zoom: int) -> float:
-    # standard web mercator resolution at zoom z, at the equator
-    earth_circumference_m = 2 * math.pi * 6378137.0
-    return earth_circumference_m / (256 * 2**zoom)
-
-
-def native_lod_for_service(service: ImageryService) -> int:
-    """The integer Web Mercator LOD closest to the service's native cell size.
-
-    A service's native resolution (m/px) rarely matches the exact Web Mercator
-    resolution at any integer LOD: it is either declared statically as a round
-    number (e.g. USGS NAIP Plus at 0.3 m/px) or derived from ArcGIS's tileInfo
-    LOD table, which uses a slightly different earth-radius constant than
-    :func:`pixel_size_for_zoom`. Comparing the raw m/px values is therefore too
-    strict -- a service that is "~LOD 19" (0.3 m/px vs the exact 0.29858 m/px)
-    would reject LOD 19 itself. Rounding the equivalent LOD to the nearest
-    integer absorbs that constant/rounding mismatch so the maximum LOD the
-    service actually provides is accepted.
-    """
-    return round(math.log2(pixel_size_for_zoom(0) / service.native_pixel_size_m))
+__all__ = [
+    "pixel_size_for_zoom",
+    "native_lod_for_service",
+    "assert_lod_within_native",
+    "bbox_from_radius",
+    "run_gdal2tiles",
+    "OrthoDownloader",
+    "download_from_arcgis",
+    "main",
+]
 
 
 def assert_lod_within_native(zoom: int, service: ImageryService) -> None:

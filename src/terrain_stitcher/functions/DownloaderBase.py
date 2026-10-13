@@ -17,6 +17,11 @@ import requests
 from pyproj import Transformer
 from tqdm import tqdm
 
+from terrain_stitcher.arcgis.level_of_detail import (
+    WEB_MERCATOR_TILE_PX,
+    pixel_size_for_zoom,
+    tile_grid_envelope,
+)
 from terrain_stitcher.arcgis.services import (
     AmbiguousServiceError,
     ImageryService,
@@ -69,6 +74,78 @@ def build_chunk_grid(xmin, ymin, xmax, ymax, chunk_px: int, pixel_size_m: float)
     print(
         f"Total raster: {total_w_px} x {total_h_px} px @ {pixel_size_m:.3f} m/px "
         f"-> {len(chunks)} chunks ({n_cols} cols x {n_rows} rows, {chunk_px}px each)"
+    )
+    return chunks
+
+
+def build_tile_aligned_chunk_grid(
+    xmin: float, ymin: float, xmax: float, ymax: float, lod: int, chunk_px: int
+):
+    """Tile-grid-anchored counterpart of :func:`build_chunk_grid`.
+
+    Instead of starting the pixel grid at the AOI bbox corner (which never
+    lines up with the tile pyramid), chunk boundaries are derived from the
+    Web Mercator tile grid at *lod*: the raster covers the tile-aligned
+    envelope of the bbox (rounded outward to whole 256-px tiles, the same
+    envelope the ortho pyramid covers) and every pixel edge lands on a
+    world-grid pixel line. The merged elevation GeoTIFF is therefore 1:1
+    aligned with ortho tiles at the same LOD -- elevation pixel ``(i, j)``
+    corresponds exactly to ortho tile pixel ``(i, j)`` -- with no client-side
+    resampling anywhere.
+
+    Chunk ``(row, col)`` corresponds to ortho tile ``(row0 + row, col0 +
+    col)`` when ``chunk_px`` is 256 (or a multiple: 512-px chunks span 2x2
+    tiles), so chunk filenames stay meaningful next to the tile cache.
+    """
+    (
+        env_xmin,
+        env_ymin,
+        env_xmax,
+        env_ymax,
+        _col0,
+        _row0,
+        tile_cols,
+        tile_rows,
+    ) = tile_grid_envelope(xmin, ymin, xmax, ymax, lod)
+
+    pixel_size_m = pixel_size_for_zoom(lod)
+    total_w_px = tile_cols * WEB_MERCATOR_TILE_PX
+    total_h_px = tile_rows * WEB_MERCATOR_TILE_PX
+
+    n_cols = math.ceil(total_w_px / chunk_px)
+    n_rows = math.ceil(total_h_px / chunk_px)
+
+    chunks = []
+    for row in range(n_rows):
+        y_off = row * chunk_px
+        h = min(chunk_px, total_h_px - y_off)
+        chunk_ymax = env_ymax - y_off * pixel_size_m
+        chunk_ymin = chunk_ymax - h * pixel_size_m
+
+        for col in range(n_cols):
+            x_off = col * chunk_px
+            w = min(chunk_px, total_w_px - x_off)
+            chunk_xmin = env_xmin + x_off * pixel_size_m
+            chunk_xmax = chunk_xmin + w * pixel_size_m
+
+            chunks.append(
+                {
+                    "row": row,
+                    "col": col,
+                    "w": w,
+                    "h": h,
+                    "xmin": chunk_xmin,
+                    "ymin": chunk_ymin,
+                    "xmax": chunk_xmax,
+                    "ymax": chunk_ymax,
+                }
+            )
+
+    print(
+        f"Total raster: {total_w_px} x {total_h_px} px @ {pixel_size_m:.3f} "
+        f"m/px (LOD {lod}, tile-grid aligned: {tile_cols} x {tile_rows} "
+        f"tiles) -> {len(chunks)} chunks "
+        f"({n_cols} cols x {n_rows} rows, {chunk_px}px each)"
     )
     return chunks
 

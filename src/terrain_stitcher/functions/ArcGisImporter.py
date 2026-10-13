@@ -201,8 +201,13 @@ def _merge_elevation_into_output(
     padding_deg: float,
 ) -> list:
     """Merge the elevation GeoTIFFs covering ``shape_file`` into one tif in
-    ``output_dir`` by reusing the prep-geo merge (clip + composite to EPSG:4326).
+    ``output_dir`` by reusing the prep-geo merge (clip + composite).
 
+    Sources produced by download-elevation are already on the Web Mercator
+    tile grid, so the merge composites them without reprojection and the
+    output stays EPSG:3857 (1:1 aligned with the ortho tiles); heterogeneous
+    inputs still fall back to the legacy composited EPSG:4326 output. Either
+    way,
     gather-ortho -e produces a single continuous elevation GeoTIFF instead of
     copying the raw tiles. Returns a one-element list holding the merged file's
     basename, for height_info.json["elevation_files"] (the schema/downstream
@@ -251,8 +256,10 @@ def process(
     print(f"Using LOD {chosen_lod}: {rows.size} tile(s) cover the region")
 
     # Elevation: merge the GeoTIFFs covering the shape AOI into one continuous
-    # GeoTIFF (clipped + composited to EPSG:4326) by reusing the prep-geo merge,
-    # instead of copying the raw tiles. The merged file is written into the
+    # GeoTIFF (clipped + composited on the Web Mercator tile grid when the
+    # sources are download-elevation output; warped to EPSG:4326 for
+    # heterogeneous legacy inputs) by reusing the prep-geo merge, instead of
+    # copying the raw tiles. The merged file is written into the
     # output and recorded as a one-element elevation_files list so the
     # height_info.json schema and its downstream consumer are unchanged. Fails
     # loudly when no elevation tile intersects the AOI (or the dir is empty),

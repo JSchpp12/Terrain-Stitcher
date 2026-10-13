@@ -4,18 +4,26 @@ import shutil
 import sys
 from pathlib import Path
 
+from terrain_stitcher.arcgis.level_of_detail import (
+    native_lod_for_service,
+    pixel_size_for_zoom,
+)
 from terrain_stitcher.arcgis.services import (
     ImageryService,
     bbox_latlon_from_radius,
     load_services,
+)
+from terrain_stitcher.common.ElevationFileInfo import (
+    ElevationFileInfo,
+    write_elevation_info,
 )
 from terrain_stitcher.common.ParseArea import ParseArea
 
 from .DownloaderBase import (
     ArcGISDownloaderBase,
     WGS84_TO_WEBMERC,
-    build_chunk_grid,
     build_mosaic,
+    build_tile_aligned_chunk_grid,
 )
 
 
@@ -48,13 +56,20 @@ def _translate_to_geotiff(vrt_path: Path, out_path: Path) -> Path:
 
 
 class ElevationDownloader(ArcGISDownloaderBase):
-    """Downloads a continuous Float32 elevation GeoTIFF over a shape AOI.
+    """Downloads a continuous, tile-grid-aligned Float32 elevation GeoTIFF.
 
     Selects an ``"elevation"`` ArcGIS service (e.g. USGS 3DEPElevation),
-    requests ``format=tiff`` + ``pixelType=F32`` chunks at ``res`` m/px,
-    verifies + mosaics them, and writes the single merged GeoTIFF to *outdir*.
-    Unlike orthoimagery there is no gdal2tiles pass -- elevation is a
-    continuous raster, not a tile pyramid.
+    requests ``format=tiff`` + ``pixelType=F32`` chunks at the Web Mercator
+    LOD's resolution, verifies + mosaics them, and writes the single merged
+    GeoTIFF to *outdir*. Unlike orthoimagery there is no gdal2tiles pass --
+    elevation is a continuous raster, not a tile pyramid.
+
+    The chunks are anchored to the standard Web Mercator tile grid (rather
+    than the AOI bbox corner), so the merged GeoTIFF is in EPSG:3857 and is
+    pixel-for-pixel aligned with the ortho tile pyramid at the same LOD: no
+    reprojection or resampling happens anywhere on the client. A twin
+    ``elevation_merged_info.json`` sidecar next to the GeoTIFF records the
+    projection system.
     """
 
     kind = "elevation"
@@ -68,7 +83,7 @@ class ElevationDownloader(ArcGISDownloaderBase):
         self,
         shapefile_path: str,
         outdir: str,
-        res: float | None = None,
+        lod: int | None = None,
         chunk_px: int = 256,
         timeout: int = 30,
         num_workers: int = 32,
@@ -82,20 +97,31 @@ class ElevationDownloader(ArcGISDownloaderBase):
         aoi_bbox = bbox_latlon_from_radius(lat, lon, shape_area.view_distance)
         service = self.resolve_service(load_services, aoi_bbox)
 
-        # Default resolution to the service's registered native cell size.
-        pixel_size_m = res if res is not None else service.native_pixel_size_m
-        if pixel_size_m <= 0:
+        # Default to the LOD closest to the service's native cell size.
+        if service.native_pixel_size_m <= 0:
             raise ValueError(
-                f"{service.key} has an invalid native pixel size; pass --res."
+                f"{service.key} has an invalid native pixel size; "
+                f"re-run refresh-services."
             )
-        if res is not None and res < service.native_pixel_size_m:
+        native_lod = native_lod_for_service(service)
+        effective_lod = lod if lod is not None else native_lod
+        pixel_size_m = pixel_size_for_zoom(effective_lod)
+
+        if lod is not None and lod > native_lod:
             # 3DEP resamples on the fly; warn rather than fail so a user can
-            # still request a slightly finer grid than the declared cell size.
+            # still request a slightly finer grid than the native LOD.
             print(
-                f"Warning: requested {res:.4f} m/px is finer than {service.key}'s "
-                f"declared native resolution {service.native_pixel_size_m:.4f} "
-                f"m/px; 3DEP will resample on the fly."
+                f"Warning: LOD {lod} ({pixel_size_m:.4f} m/px) is finer than "
+                f"{service.key}'s native resolution "
+                f"{service.native_pixel_size_m:.4f} m/px (~LOD {native_lod}); "
+                f"the service will resample on the fly, so the extra detail "
+                f"is interpolated, not real."
             )
+        print(
+            f"Fetching elevation at LOD {effective_lod} "
+            f"({pixel_size_m:.4f} m/px, tile-grid aligned; native ~LOD "
+            f"{native_lod})"
+        )
 
         # Expand the AOI by an optional padding (degrees) before projecting.
         min_lat, min_lon, max_lat, max_lon = aoi_bbox
@@ -111,7 +137,9 @@ class ElevationDownloader(ArcGISDownloaderBase):
         tmp_dir = Path(outdir).parent / self.tmp_dir_name
         tmp_dir.mkdir(exist_ok=True)
 
-        chunks = build_chunk_grid(xmin, ymin, xmax, ymax, chunk_px, pixel_size_m)
+        chunks = build_tile_aligned_chunk_grid(
+            xmin, ymin, xmax, ymax, effective_lod, chunk_px
+        )
 
         n_rows = max(c["row"] for c in chunks) + 1
         n_cols = max(c["col"] for c in chunks) + 1
@@ -139,6 +167,13 @@ class ElevationDownloader(ArcGISDownloaderBase):
         print(f"Writing merged GeoTIFF -> {outdir}")
         _translate_to_geotiff(mosaic_path, Path(outdir))
 
+        # Record the projection system beside the merged GeoTIFF: with the
+        # aligned pipeline the elevation is in projected meters (EPSG:3857),
+        # not degrees, and consumers need to know.
+        info_path = write_elevation_info(
+            outdir, ElevationFileInfo(projection="EPSG:3857")
+        )
+
         if failed:
             print(
                 f"\nCompleted with {len(failed)} failed chunk(s); "
@@ -149,12 +184,13 @@ class ElevationDownloader(ArcGISDownloaderBase):
         else:
             shutil.rmtree(tmp_dir, ignore_errors=True)
             print(f"Done. Merged elevation GeoTIFF written to: {outdir}")
+            print(f"Projection sidecar written to: {info_path}")
 
 
 def download_elevation(
     shapefile_path: str,
     outdir: str = "elevation_merged.tif",
-    res: float | None = None,
+    lod: int | None = None,
     chunk_px: int = 256,
     timeout: int = 30,
     num_workers: int = 32,
@@ -162,18 +198,22 @@ def download_elevation(
     service_index: int | None = None,
     padding: float = 0.0,
 ):
-    """Fetch a continuous Float32 elevation GeoTIFF over the shape AOI.
+    """Fetch a continuous, tile-grid-aligned Float32 elevation GeoTIFF.
 
     Selects an ``"elevation"`` ArcGIS service (e.g. USGS 3DEPElevation),
-    requests ``format=tiff`` + ``pixelType=F32`` chunks at ``res`` m/px,
-    verifies + mosaics them, and writes the single merged GeoTIFF to
-    *outdir*. ``res`` defaults to the selected service's registered native
-    pixel size.
+    requests ``format=tiff`` + ``pixelType=F32`` chunks at the resolution of
+    Web Mercator *lod*, verifies + mosaics them, and writes the single merged
+    GeoTIFF to *outdir* plus an ``<name>_info.json`` sidecar recording the
+    projection system. *lod* defaults to the LOD closest to the selected
+    service's registered native pixel size (~LOD 14 for 3DEP's 10 m/px).
+
+    Because the chunks are anchored to the Web Mercator tile grid, the output
+    is EPSG:3857 and aligns 1:1 with ortho tiles at the same LOD.
     """
     ElevationDownloader(service=service, service_index=service_index).run(
         shapefile_path=shapefile_path,
         outdir=outdir,
-        res=res,
+        lod=lod,
         chunk_px=chunk_px,
         timeout=timeout,
         num_workers=num_workers,
@@ -184,7 +224,7 @@ def download_elevation(
 def main_elevation(
     shape_file,
     outdir="elevation_merged.tif",
-    res: float | None = None,
+    lod: int | None = None,
     timeout: int = 30,
     num_workers: int = 32,
     chunk_px: int = 256,
@@ -195,10 +235,10 @@ def main_elevation(
     download_elevation(
         shapefile_path=shape_file,
         outdir=outdir,
-        res=res,
-        chunk_px=chunk_px,
+        lod=lod,
         timeout=timeout,
         num_workers=num_workers,
+        chunk_px=chunk_px,
         service=service,
         service_index=service_index,
         padding=padding,
